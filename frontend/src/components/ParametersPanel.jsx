@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react'; // <-- Import useCallback
+import React, { useState, useEffect, useCallback } from 'react';
 import { Paper, Typography, Grid, TextField, Select, MenuItem, Button, FormControl, InputLabel, CircularProgress, Box, Checkbox, FormControlLabel } from '@mui/material';
 import { useSnackbar } from 'notistack';
 
@@ -19,20 +19,7 @@ export default function ParametersPanel({ isMock = false }) {
     const [loading, setLoading] = useState(false);
     const [botRunning, setBotRunning] = useState(false);
 
-    // --- UPDATED: Wrapped in useCallback for stability ---
-    const fetchStatus = useCallback(async () => {
-        try {
-            const res = await fetch('http://localhost:8000/api/status');
-            const data = await res.json();
-            setAuth(data);
-        } catch (error) {
-            console.error("Failed to fetch API status", error);
-            setAuth({ status: 'error' });
-            enqueueSnackbar('Failed to connect to the backend server.', { variant: 'error' });
-        }
-    }, [enqueueSnackbar]); // Dependency on enqueueSnackbar
-
-    // --- UPDATED: Wrapped in useCallback for stability ---
+    // --- UPDATED: Simplified handleAuthenticate logic ---
     const handleAuthenticate = useCallback(async (token) => {
         setLoading(true);
         try {
@@ -43,27 +30,39 @@ export default function ParametersPanel({ isMock = false }) {
             });
             
             const data = await response.json();
-            if (!response.ok || data.status === 'error') {
-                throw new Error(data.message || 'Authentication failed.');
+            if (!response.ok) {
+                // The new backend HTTPException sends the error in 'detail'
+                throw new Error(data.detail || 'Authentication failed.');
             }
             
             enqueueSnackbar('Authentication successful!', { variant: 'success' });
-            // This now correctly calls the stable fetchStatus function
-            await fetchStatus();
+            
+            // --- THE FIX ---
+            // We now get the user ID directly from the auth response.
+            // We set the state and DO NOT make another network call.
+            setAuth({ status: 'authenticated', user: data.user });
 
         } catch (error) {
             console.error("Auth failed", error);
             enqueueSnackbar(error.message, { variant: 'error' });
         }
         setLoading(false);
-    }, [enqueueSnackbar, fetchStatus]); // Dependency on its own used functions
+    }, [enqueueSnackbar]); // Simplified dependencies
 
-    // --- UPDATED: useEffect with correct dependencies ---
-    useEffect(() => {
-        if (isMock) { 
-            setAuth({ status: 'authenticated' }); 
-            return; 
+    const fetchStatus = useCallback(async () => {
+        try {
+            const res = await fetch('http://localhost:8000/api/status');
+            const data = await res.json();
+            setAuth(data);
+        } catch (error) {
+            console.error("Failed to fetch API status", error);
+            setAuth({ status: 'error' });
+            enqueueSnackbar('Failed to connect to the backend server.', { variant: 'error' });
         }
+    }, [enqueueSnackbar]);
+
+    useEffect(() => {
+        if (isMock) { setAuth({ status: 'authenticated' }); return; }
         
         const autoAuthenticate = async () => {
             const urlParams = new URLSearchParams(window.location.search);
@@ -86,16 +85,13 @@ export default function ParametersPanel({ isMock = false }) {
         };
         
         autoAuthenticate();
-    }, [isMock, handleAuthenticate, fetchStatus, enqueueSnackbar]); // <-- Correct dependency array
+    }, [isMock, handleAuthenticate, fetchStatus, enqueueSnackbar]);
 
+    // ... (The rest of the file remains the same as the last version)
     const handleChange = (e) => {
         const { name, value, type, checked } = e.target;
-        setParams(prev => ({ 
-            ...prev, 
-            [name]: type === 'checkbox' ? checked : value 
-        }));
+        setParams(prev => ({ ...prev, [name]: type === 'checkbox' ? checked : value }));
     };
-    
     const handleStartStop = async () => {
         if (isMock) { setBotRunning(!botRunning); return; }
         setLoading(true);
@@ -106,15 +102,10 @@ export default function ParametersPanel({ isMock = false }) {
                 headers: { 'Content-Type': 'application/json' },
                 body: botRunning ? '' : JSON.stringify({ params, selectedIndex: params.selectedIndex })
             });
-            
             const data = await res.json();
-            if (!res.ok) {
-                 throw new Error(data.detail || 'Action failed.');
-            }
-
+            if (!res.ok) { throw new Error(data.detail || 'Action failed.'); }
             setBotRunning(!botRunning);
             enqueueSnackbar(data.message, { variant: 'info' });
-
         } catch (error) {
             console.error("Action failed", error);
             enqueueSnackbar(error.message, { variant: 'error' });
@@ -122,21 +113,15 @@ export default function ParametersPanel({ isMock = false }) {
         setLoading(false);
     };
 
-    if (auth.status === 'loading') {
-        return <Paper sx={{ p: 2, textAlign: 'center' }}><CircularProgress /></Paper>;
-    }
+    if (auth.status === 'loading') return <Paper sx={{ p: 2, textAlign: 'center' }}><CircularProgress /></Paper>;
 
     if (auth.status !== 'authenticated') {
         return (
             <Paper elevation={3} sx={{ p: 2 }}>
                 <Typography sx={{mb: 2}}>Authentication Required</Typography>
-                <Button fullWidth variant="contained" href={auth.login_url}>
-                    Login with Kite
-                </Button>
+                <Button fullWidth variant="contained" href={auth.login_url}>Login with Kite</Button>
                 <Box sx={{mt: 2, p: 1, border: '1px dashed grey', borderRadius: 1}}>
-                    <Typography variant="caption">
-                        After logging in with Kite, you will be redirected back here. The app will attempt to authenticate automatically.
-                    </Typography>
+                    <Typography variant="caption">After logging in, you will be redirected back here for automatic authentication.</Typography>
                 </Box>
             </Paper>
         );
@@ -155,53 +140,28 @@ export default function ParametersPanel({ isMock = false }) {
 
     return (
         <Paper elevation={3} sx={{ p: 2 }}>
-            <Typography variant="body2" sx={{ mb: 2 }}>Parameters</Typography>
+            <Typography variant="body2" sx={{ mb: 2 }}>Parameters (User: {auth.user})</Typography>
             <Grid container spacing={2}>
                 {fields.map(field => (
                     <Grid item xs={12} key={field.name}>
                         {field.type === 'select' ? (
                             <FormControl fullWidth size="small">
                                 <InputLabel>{field.label}</InputLabel>
-                                <Select
-                                    name={field.name}
-                                    value={params[field.name]}
-                                    label={field.label}
-                                    onChange={handleChange}
-                                    disabled={botRunning}
-                                >
+                                <Select name={field.name} value={params[field.name]} label={field.label} onChange={handleChange} disabled={botRunning}>
                                     {field.options.map(opt => <MenuItem key={opt} value={opt}>{opt}</MenuItem>)}
                                 </Select>
                             </FormControl>
                         ) : (
-                            <TextField
-                                name={field.name}
-                                label={field.label}
-                                type="number"
-                                value={params[field.name]}
-                                onChange={handleChange}
-                                size="small"
-                                fullWidth
-                                disabled={botRunning}
-                            />
+                            <TextField name={field.name} label={field.label} type="number" value={params[field.name]} onChange={handleChange} size="small" fullWidth disabled={botRunning}/>
                         )}
                     </Grid>
                 ))}
                 <Grid item xs={12}>
-                    <FormControlLabel 
-                        control={<Checkbox name="auto_scan_uoa" checked={params.auto_scan_uoa} onChange={handleChange} disabled={botRunning} />} 
-                        label="Enable Auto-Scan for UOA" 
-                    />
+                    <FormControlLabel control={<Checkbox name="auto_scan_uoa" checked={params.auto_scan_uoa} onChange={handleChange} disabled={botRunning} />} label="Enable Auto-Scan for UOA" />
                 </Grid>
             </Grid>
             <Button fullWidth sx={{ mt: 2 }} variant="outlined" disabled={botRunning}>Apply Changes</Button>
-            <Button
-                fullWidth
-                sx={{ mt: 1 }}
-                variant="contained"
-                color={botRunning ? "error" : "success"}
-                onClick={handleStartStop}
-                disabled={loading}
-            >
+            <Button fullWidth sx={{ mt: 1 }} variant="contained" color={botRunning ? "error" : "success"} onClick={handleStartStop} disabled={loading}>
                 {loading ? <CircularProgress size={24} /> : (botRunning ? 'Stop Trading Bot' : 'Start Trading Bot')}
             </Button>
         </Paper>

@@ -33,28 +33,29 @@ def set_access_token(token):
         return False, "Token is null or empty."
     try:
         kite.set_access_token(token)
-        profile = kite.profile() # This call will fail if the token is invalid
+        profile = kite.profile()
         access_token = token
         print(f"Kite connection verified for user: {profile['user_id']}")
-        return True, "Connection verified."
+        # --- MODIFIED: Return the full profile on success ---
+        return True, profile
     except Exception as e:
         error_message = f"Error setting access token: {e}"
         print(error_message)
         access_token = None
-        return False, str(e) # Return the actual error message
+        return False, str(e)
 
+# Replace this function in backend/core/kite.py
 def generate_session_and_set_token(request_token):
-    # This function now correctly returns the result from set_access_token
     try:
         session = kite.generate_session(request_token, api_secret=API_SECRET)
         token = session["access_token"]
         save_access_token(token)
-        # The result of this call determines success or failure
+        # This will now return (True, profile_data) on success
         return set_access_token(token)
     except Exception as e:
         error_message = f"Authentication failed: {e}"
         print(error_message)
-        return False, str(e)
+
 
 # --- Startup Check ---
 if DEV_MODE_ENABLED and DEV_ACCESS_TOKEN != "PASTE_YOUR_VALID_ACCESS_TOKEN_HERE":

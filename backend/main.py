@@ -91,10 +91,14 @@ async def get_status():
 
 @app.post("/api/authenticate")
 async def authenticate(token_request: TokenRequest):
-    success, message = generate_session_and_set_token(token_request.request_token)
+    # This now returns a tuple (success, data) where data can be a profile dict or error string
+    success, data = generate_session_and_set_token(token_request.request_token)
     if success:
-        return {"status": "success", "message": "Authentication successful."}
-    raise HTTPException(status_code=400, detail=message)
+        # --- MODIFIED: Return the user_id from the profile data ---
+        return {"status": "success", "message": "Authentication successful.", "user": data.get('user_id')}
+    
+    # Use HTTPException for clearer error handling on the client side
+    raise HTTPException(status_code=400, detail=data)
 
 # --- NEW: Endpoint for Optimizer ---
 @app.post("/api/optimize")
