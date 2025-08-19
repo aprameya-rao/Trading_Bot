@@ -15,40 +15,26 @@ try:
     def generate_tone(frequency, duration_ms):
         sample_rate = 44100
         t = np.linspace(0, duration_ms / 1000, int(sample_rate * duration_ms / 1000), False)
-        audio = np.sin(frequency * t * 2 * np.pi)
-        max_abs = np.max(np.abs(audio))
-        if max_abs > 0:
-            audio *= 32767 / max_abs
+        audio = np.sin(frequency * t * 2 * np.pi); max_abs = np.max(np.abs(audio))
+        if max_abs > 0: audio *= 32767 / max_abs
         return audio.astype(np.int16)
     def play_sound(frequency, duration_ms):
-        try:
-            tone = generate_tone(frequency, duration_ms)
-            sa.play_buffer(tone, 1, 2, 44100)
-        except Exception as e:
-            print(f"Could not play sound: {e}")
+        try: sa.play_buffer(generate_tone(frequency, duration_ms), 1, 2, 44100)
+        except Exception as e: print(f"Could not play sound: {e}")
 except ImportError:
-    print("Warning: 'simpleaudio' not found.")
-    def play_sound(frequency, duration_ms):
-        pass
-
+    def play_sound(frequency, duration_ms): pass
 def play_entry_sound(): play_sound(1200, 200)
 def play_profit_sound(): play_sound(1500, 300)
 def play_loss_sound(): play_sound(300, 500)
 def play_warning_sound(): play_sound(400, 800)
-
 def calculate_wma(series, length=9):
     if length < 1 or len(series) < length: return pd.Series(index=series.index, dtype=float)
-    weights = np.arange(1, length + 1)
-    return series.rolling(length).apply(lambda x: np.dot(x, weights) / weights.sum(), raw=True)
-
+    weights = np.arange(1, length + 1); return series.rolling(length).apply(lambda x: np.dot(x, weights) / weights.sum(), raw=True)
 def calculate_rsi(series, length=9):
     if length < 1 or len(series) < length: return pd.Series(index=series.index, dtype=float)
-    delta = series.diff()
-    gain = (delta.where(delta > 0, 0)).ewm(alpha=1/length, adjust=False).mean()
+    delta = series.diff(); gain = (delta.where(delta > 0, 0)).ewm(alpha=1/length, adjust=False).mean()
     loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/length, adjust=False).mean().replace(0, 1e-10)
-    rs = gain / loss
-    return 100 - (100 / (1 + rs))
-
+    return 100 - (100 / (1 + (gain / loss)))
 def calculate_atr(high, low, close, length=14):
     if length < 1 or len(close) < length: return pd.Series(index=close.index, dtype=float)
     tr = pd.concat([high - low, np.abs(high - close.shift()), np.abs(low - close.shift())], axis=1).max(axis=1)
@@ -100,10 +86,7 @@ class Strategy:
         await self.manager.broadcast({'type': 'debug_log', 'payload': {'time': datetime.now().strftime('%H:%M:%S'), 'source': source, 'message': message}})
     
     async def _update_ui_status(self):
-        # --- NEW: Added print statement for debugging ---
-        print("DEBUG: Preparing to send 'status_update'")
         await self.manager.broadcast({'type': 'status_update', 'payload': {'connection': 'CONNECTED' if self.ticker_manager and self.ticker_manager.is_connected else 'DISCONNECTED', 'mode': self.trading_mode.upper(), 'indexPrice': self.prices.get(self.index_symbol, 0), 'trend': self.trend_state or '---'}})
-
     
     async def _update_ui_performance(self):
         await self.manager.broadcast({'type': 'daily_performance_update', 'payload': {'netPnl': self.daily_pnl, 'grossProfit': self.daily_profit, 'grossLoss': self.daily_loss, 'wins': self.performance_stats['winning_trades'], 'losses': self.performance_stats['losing_trades']}})
@@ -145,15 +128,15 @@ class Strategy:
     
     # --- Ticker Connection Callbacks ---
     async def on_ticker_connect(self):
-        await self._log_debug("WebSocket", f"Connected. Subscribing to index: {self.index_symbol}"); await self._update_ui_status()
+        await self._log_debug("WebSocket", f"Connected. Subscribing to index: {self.index_symbol}")
+        await self._update_ui_status()
         if self.ticker_manager: self.ticker_manager.resubscribe([self.index_token])
     
     async def on_ticker_disconnect(self):
-        await self._update_ui_status(); await self._log_debug("WebSocket", "Kite Ticker Disconnected.")
+        await self._update_ui_status()
+        await self._log_debug("WebSocket", "Kite Ticker Disconnected.")
     
     async def handle_ticks_async(self, ticks):
-        # --- NEW: Added print statement for debugging ---
-        print(f"DEBUG: Tick data received at {datetime.now().time()}")
         if self.ticker_manager and not self.initial_subscription_done and any(t.get('instrument_token') == self.index_token for t in ticks):
             self.prices[self.index_symbol] = next(t['last_price'] for t in ticks if t.get('instrument_token') == self.index_token)
             await self._log_debug("WebSocket", "Index price received. Subscribing to full token list.")
@@ -170,7 +153,7 @@ class Strategy:
                 if self.position and self.position['symbol'] == symbol:
                     await self.evaluate_exit_logic()
         if datetime.now().second % 2 == 0:
-            await self._update_ui_status() # This is the periodic call
+            await self._update_ui_status()
             await self._update_ui_option_chain()
             await self._update_ui_chart_data()
         
@@ -236,79 +219,6 @@ class Strategy:
         if self.check_steep_reentry(): return
         if await self.check_rsi_immediate_entry(): return
 
-    async def check_uoa_entry(self, log=False):
-        if not self.uoa_watchlist or datetime.now().second < 10: return False
-        for token, data in list(self.uoa_watchlist.items()):
-            symbol, side = data['symbol'], data['type']; is_trade_valid = False; trigger_reason = "UOA_Entry_Unknown"
-            if self.aggressiveness == 'Conservative':
-                trend_ok = (not self.trend_state) or (side == 'CE' and self.trend_state == 'BULLISH') or (side == 'PE' and self.trend_state == 'BEARISH')
-                if trend_ok: is_trade_valid, trigger_reason = True, "UOA_Trend_Confirmed"
-            else:
-                index_momentum_ok = (side == 'CE' and self.is_price_rising(self.index_symbol)) or (side == 'PE' and not self.is_price_rising(self.index_symbol))
-                if index_momentum_ok: is_trade_valid, trigger_reason = True, "UOA_Momentum_Confirmed"
-            if not is_trade_valid: continue
-            option_candle = self.option_candles.get(symbol); current_price = self.prices.get(symbol)
-            if not option_candle or 'open' not in option_candle or not current_price: continue
-            if current_price > option_candle['open'] and self.is_price_rising(symbol):
-                await self._log_debug("UOA", f"CONFIRMED UOA trade for {symbol}. Reason: {trigger_reason}")
-                opt = self.get_entry_option(side, strike=data['strike']); await self.take_trade(trigger_reason, opt); del self.uoa_watchlist[token]; await self._update_ui_uoa_list(); return True
-        return False
-
-    async def check_ma_crossover_anticipation(self, log=False):
-        last = self.data_df.iloc[-1]; wma, sma = last['wma'], last['sma']
-        if pd.isna(wma) or pd.isna(sma): return False
-        gap = abs(wma - sma); threshold = last['close'] * self.STRATEGY_PARAMS.get('ma_gap_threshold_pct', 0.0055)
-        if gap >= threshold: return False
-        if sma > wma and self.is_price_rising(self.index_symbol):
-            opt = self.get_entry_option('CE');
-            if opt and self.is_price_rising(opt['tradingsymbol']): await self.take_trade('MA_Anticipate_CE', opt); return True
-        if wma > sma and not self.is_price_rising(self.index_symbol):
-            opt = self.get_entry_option('PE');
-            if opt and self.is_price_rising(opt['tradingsymbol']): await self.take_trade('MA_Anticipate_PE', opt); return True
-        return False
-
-    async def check_trend_continuation(self, log=False):
-        if not self.trend_state: return False
-        if self.aggressiveness == 'Conservative':
-            if self.trend_state == 'BULLISH':
-                opt = self.get_entry_option('CE');
-                if opt and self.is_candle_bullish(self.index_symbol) and self.is_candle_bullish(opt['tradingsymbol']) and self.is_price_rising(self.index_symbol) and self.is_price_rising(opt['tradingsymbol']): await self.take_trade('Trend_Continuation_CE', opt); return True
-            if self.trend_state == 'BEARISH':
-                opt = self.get_entry_option('PE');
-                if opt and not self.is_candle_bullish(self.index_symbol) and not self.is_candle_bullish(opt['tradingsymbol']) and not self.is_price_rising(self.index_symbol) and self.is_price_rising(opt['tradingsymbol']): await self.take_trade('Trend_Continuation_PE', opt); return True
-        else:
-            if self.trend_state == 'BULLISH':
-                opt = self.get_entry_option('CE');
-                if opt and self.is_price_rising(self.index_symbol) and self.is_price_rising(opt['tradingsymbol']): await self.take_trade('Trend_Continuation_CE (M)', opt); return True
-            if self.trend_state == 'BEARISH':
-                opt = self.get_entry_option('PE');
-                if opt and not self.is_price_rising(self.index_symbol) and self.is_price_rising(opt['tradingsymbol']): await self.take_trade('Trend_Continuation_PE (M)', opt); return True
-        return False
-
-    def check_steep_reentry(self):
-        last = self.data_df.iloc[-1];
-        if last['wma'] > last['sma'] and not self.is_candle_bullish(self.index_symbol): self.pending_steep_signal = {'side': 'PE', 'reason': 'Reversal_PE'}
-        if last['wma'] < last['sma'] and self.is_candle_bullish(self.index_symbol): self.pending_steep_signal = {'side': 'CE', 'reason': 'Reversal_CE'}
-        return False
-
-    async def check_pending_steep_signal(self):
-        if not self.pending_steep_signal: return
-        signal, self.pending_steep_signal = self.pending_steep_signal, None; opt = self.get_entry_option(signal['side'])
-        if opt and self.is_price_rising(opt['tradingsymbol']): await self.take_trade(f"{signal['reason']}", opt)
-
-    async def check_rsi_immediate_entry(self, log=False):
-        if len(self.data_df) < self.STRATEGY_PARAMS['rsi_angle_lookback'] + 1: return False
-        last, prev = self.data_df.iloc[-1], self.data_df.iloc[-2]
-        if any(pd.isna(v) for v in [last['rsi'], prev['rsi'], last['rsi_sma'], prev['rsi_sma']]): return False
-        angle = self._calculate_rsi_angle(); angle_thresh = self.STRATEGY_PARAMS['rsi_angle_threshold']
-        if last['rsi'] > last['rsi_sma'] and prev['rsi'] <= prev['rsi_sma'] and angle > angle_thresh:
-            opt = self.get_entry_option('CE');
-            if opt and self.is_price_rising(self.index_symbol) and self.is_price_rising(opt['tradingsymbol']): await self.take_trade('RSI_Immediate_CE', opt); return True
-        if last['rsi'] < last['rsi_sma'] and prev['rsi'] >= prev['rsi_sma'] and angle < -angle_thresh:
-            opt = self.get_entry_option('PE');
-            if opt and not self.is_price_rising(self.index_symbol) and self.is_price_rising(opt['tradingsymbol']): await self.take_trade('RSI_Immediate_PE', opt); return True
-        return False
-
     # --- Trade Execution and Management ---
     async def take_trade(self, trigger, opt):
         if self.position or not opt: return
@@ -357,19 +267,77 @@ class Strategy:
         await self.log_trade_decision(log_info)
         self.position = None; await self._update_ui_trade_status(); await self._update_ui_trade_log(); await self._update_ui_performance()
     
-    # --- UOA and Instrument Helpers ---
+    # --- All Other Helper Functions (Sub-strategies, UOA, Instruments) ---
+    def is_price_rising(self, symbol):
+        history = self.price_history.get(symbol, []); return len(history) >= 2 and history[-1] > history[-2]
+    def is_candle_bullish(self, symbol):
+        candle = self.option_candles.get(symbol) if symbol != self.index_symbol else self.current_candle
+        return candle and 'close' in candle and 'open' in candle and candle['close'] > candle['open']
+    def _calculate_rsi_angle(self):
+        lookback = self.STRATEGY_PARAMS['rsi_angle_lookback']
+        if len(self.data_df) < lookback + 1: return 0
+        rsi_values = self.data_df['rsi'].iloc[-(lookback + 1):].values
+        try: return math.degrees(math.atan(np.polyfit(np.arange(len(rsi_values)), rsi_values, 1)[0]))
+        except (np.linalg.LinAlgError, ValueError): return 0
+    async def check_ma_crossover_anticipation(self, log=False):
+        last = self.data_df.iloc[-1]; wma, sma = last['wma'], last['sma']
+        if pd.isna(wma) or pd.isna(sma): return False
+        gap = abs(wma - sma); threshold = last['close'] * self.STRATEGY_PARAMS.get('ma_gap_threshold_pct', 0.0055)
+        if gap >= threshold: return False
+        if sma > wma and self.is_price_rising(self.index_symbol):
+            opt = self.get_entry_option('CE');
+            if opt and self.is_price_rising(opt['tradingsymbol']): await self.take_trade('MA_Anticipate_CE', opt); return True
+        if wma > sma and not self.is_price_rising(self.index_symbol):
+            opt = self.get_entry_option('PE');
+            if opt and self.is_price_rising(opt['tradingsymbol']): await self.take_trade('MA_Anticipate_PE', opt); return True
+        return False
+    async def check_trend_continuation(self, log=False):
+        if not self.trend_state: return False
+        if self.aggressiveness == 'Conservative':
+            if self.trend_state == 'BULLISH':
+                opt = self.get_entry_option('CE');
+                if opt and self.is_candle_bullish(self.index_symbol) and self.is_candle_bullish(opt['tradingsymbol']) and self.is_price_rising(self.index_symbol) and self.is_price_rising(opt['tradingsymbol']): await self.take_trade('Trend_Continuation_CE', opt); return True
+            if self.trend_state == 'BEARISH':
+                opt = self.get_entry_option('PE');
+                if opt and not self.is_candle_bullish(self.index_symbol) and not self.is_candle_bullish(opt['tradingsymbol']) and not self.is_price_rising(self.index_symbol) and self.is_price_rising(opt['tradingsymbol']): await self.take_trade('Trend_Continuation_PE', opt); return True
+        else:
+            if self.trend_state == 'BULLISH':
+                opt = self.get_entry_option('CE');
+                if opt and self.is_price_rising(self.index_symbol) and self.is_price_rising(opt['tradingsymbol']): await self.take_trade('Trend_Continuation_CE (M)', opt); return True
+            if self.trend_state == 'BEARISH':
+                opt = self.get_entry_option('PE');
+                if opt and not self.is_price_rising(self.index_symbol) and self.is_price_rising(opt['tradingsymbol']): await self.take_trade('Trend_Continuation_PE (M)', opt); return True
+        return False
+    def check_steep_reentry(self):
+        last = self.data_df.iloc[-1];
+        if last['wma'] > last['sma'] and not self.is_candle_bullish(self.index_symbol): self.pending_steep_signal = {'side': 'PE', 'reason': 'Reversal_PE'}
+        if last['wma'] < last['sma'] and self.is_candle_bullish(self.index_symbol): self.pending_steep_signal = {'side': 'CE', 'reason': 'Reversal_CE'}
+        return False
+    async def check_pending_steep_signal(self):
+        if not self.pending_steep_signal: return
+        signal, self.pending_steep_signal = self.pending_steep_signal, None; opt = self.get_entry_option(signal['side'])
+        if opt and self.is_price_rising(opt['tradingsymbol']): await self.take_trade(f"{signal['reason']}", opt)
+    async def check_rsi_immediate_entry(self, log=False):
+        if len(self.data_df) < self.STRATEGY_PARAMS['rsi_angle_lookback'] + 1: return False
+        last, prev = self.data_df.iloc[-1], self.data_df.iloc[-2]
+        if any(pd.isna(v) for v in [last['rsi'], prev['rsi'], last['rsi_sma'], prev['rsi_sma']]): return False
+        angle = self._calculate_rsi_angle(); angle_thresh = self.STRATEGY_PARAMS['rsi_angle_threshold']
+        if last['rsi'] > last['rsi_sma'] and prev['rsi'] <= prev['rsi_sma'] and angle > angle_thresh:
+            opt = self.get_entry_option('CE');
+            if opt and self.is_price_rising(self.index_symbol) and self.is_price_rising(opt['tradingsymbol']): await self.take_trade('RSI_Immediate_CE', opt); return True
+        if last['rsi'] < last['rsi_sma'] and prev['rsi'] >= prev['rsi_sma'] and angle < -angle_thresh:
+            opt = self.get_entry_option('PE');
+            if opt and not self.is_price_rising(self.index_symbol) and self.is_price_rising(opt['tradingsymbol']): await self.take_trade('RSI_Immediate_PE', opt); return True
+        return False
     def load_instruments(self):
         try: return [i for i in kite.instruments(self.exchange) if i['name'] == self.index_name and i['instrument_type'] in ['CE', 'PE']]
         except Exception as e: print(f"Error loading instruments: {e}"); return []
-    
     def get_weekly_expiry(self):
         today = date.today(); future_expiries = sorted([i['expiry'] for i in self.option_instruments if i.get('expiry') and i['expiry'] >= today]); return future_expiries[0] if future_expiries else None
-    
     def _calculate_indicators(self, df):
         df = df.copy(); df['sma'] = df['close'].rolling(window=self.STRATEGY_PARAMS['sma_period']).mean(); df['wma'] = calculate_wma(df['close'], length=self.STRATEGY_PARAMS['wma_period'])
         df['rsi'] = calculate_rsi(df['close'], length=self.STRATEGY_PARAMS['rsi_period']); df['rsi_sma'] = df['rsi'].rolling(window=self.STRATEGY_PARAMS['rsi_signal_period']).mean()
         df['atr'] = calculate_atr(df['high'], df['low'], df['close'], length=self.STRATEGY_PARAMS['atr_period']); return df
-    
     def get_entry_option(self, side, strike=None):
         spot = self.prices.get(self.index_symbol)
         if not spot: return None
@@ -377,23 +345,19 @@ class Strategy:
         for o in self.option_instruments:
             if o['expiry'] == self.last_used_expiry and o['strike'] == strike and o['instrument_type'] == side: return o
         return None
-    
     def update_price_history(self, symbol, price):
         self.price_history.setdefault(symbol, []).append(price)
         if len(self.price_history[symbol]) > 10: self.price_history[symbol].pop(0)
-    
     def get_all_option_tokens(self):
         spot = self.prices.get(self.index_symbol);
         if not spot: return [self.index_token]
         atm_strike = self.strike_step * round(spot / self.strike_step); strikes = [atm_strike + (i - 3) * self.strike_step for i in range(7)]
         tokens = {self.index_token, *[opt['instrument_token'] for strike in strikes for side in ['CE', 'PE'] if (opt := self.get_entry_option(side, strike))], *self.uoa_watchlist.keys()}; return list(tokens)
-    
     def get_strike_pairs(self, count=7):
         spot = self.prices.get(self.index_symbol)
         if not spot: return []
         atm_strike = self.strike_step * round(spot / self.strike_step); strikes = [atm_strike + (i - count // 2) * self.strike_step for i in range(count)]
         return [{"strike": strike, "ce": self.get_entry_option('CE', strike), "pe": self.get_entry_option('PE', strike)} for strike in strikes]
-
     def calculate_uoa_conviction_score(self, option_data, atm_strike):
         score, v_oi_ratio = 0, option_data.get('volume', 0) / (option_data.get('oi', 0) + 1)
         score += min(v_oi_ratio / 2.0, 5); price_change_pct = option_data.get('change', 0); score += min(price_change_pct / 10.0, 5)
@@ -401,7 +365,6 @@ class Strategy:
         if strike_distance <= 2: score += 3
         elif strike_distance <= 4: score += 1
         return score
-
     async def add_to_watchlist(self, side, strike):
         opt = self.get_entry_option(side, strike=strike)
         if opt:
@@ -409,7 +372,6 @@ class Strategy:
             self.uoa_watchlist[opt['instrument_token']] = {'symbol': opt['tradingsymbol'], 'type': side, 'strike': strike}
             await self._log_debug("UOA", f"Added {opt['tradingsymbol']} to watchlist."); await self._update_ui_uoa_list(); play_entry_sound(); return True
         await self._log_debug("UOA", f"Could not find {side} option for strike {strike}"); return False
-
     async def scan_for_unusual_activity(self):
         await self._log_debug("Scanner", "Running intelligent UOA scan...")
         spot = self.prices.get(self.index_symbol)
