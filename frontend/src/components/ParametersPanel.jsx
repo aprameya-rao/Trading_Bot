@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react'; // <-- Import useCallback
 import { Paper, Typography, Grid, TextField, Select, MenuItem, Button, FormControl, InputLabel, CircularProgress, Box, Checkbox, FormControlLabel } from '@mui/material';
 import { useSnackbar } from 'notistack';
 
@@ -19,7 +19,21 @@ export default function ParametersPanel({ isMock = false }) {
     const [loading, setLoading] = useState(false);
     const [botRunning, setBotRunning] = useState(false);
 
-    const handleAuthenticate = async (token) => {
+    // --- UPDATED: Wrapped in useCallback for stability ---
+    const fetchStatus = useCallback(async () => {
+        try {
+            const res = await fetch('http://localhost:8000/api/status');
+            const data = await res.json();
+            setAuth(data);
+        } catch (error) {
+            console.error("Failed to fetch API status", error);
+            setAuth({ status: 'error' });
+            enqueueSnackbar('Failed to connect to the backend server.', { variant: 'error' });
+        }
+    }, [enqueueSnackbar]); // Dependency on enqueueSnackbar
+
+    // --- UPDATED: Wrapped in useCallback for stability ---
+    const handleAuthenticate = useCallback(async (token) => {
         setLoading(true);
         try {
             const response = await fetch('http://localhost:8000/api/authenticate', {
@@ -34,13 +48,7 @@ export default function ParametersPanel({ isMock = false }) {
             }
             
             enqueueSnackbar('Authentication successful!', { variant: 'success' });
-            
-            // --- THE FIX IS HERE ---
-            // We explicitly set the status to 'authenticated' to force the UI to update
-            // immediately, without waiting for the fetchStatus() network call.
-            setAuth({ status: 'authenticated' }); 
-
-            // We still call fetchStatus to get the latest user details, but the UI has already updated.
+            // This now correctly calls the stable fetchStatus function
             await fetchStatus();
 
         } catch (error) {
@@ -48,22 +56,14 @@ export default function ParametersPanel({ isMock = false }) {
             enqueueSnackbar(error.message, { variant: 'error' });
         }
         setLoading(false);
-    };
+    }, [enqueueSnackbar, fetchStatus]); // Dependency on its own used functions
 
-    const fetchStatus = async () => {
-        try {
-            const res = await fetch('http://localhost:8000/api/status');
-            const data = await res.json();
-            setAuth(data);
-        } catch (error) {
-            console.error("Failed to fetch API status", error);
-            setAuth({ status: 'error' });
-            enqueueSnackbar('Failed to connect to the backend server.', { variant: 'error' });
-        }
-    };
-
+    // --- UPDATED: useEffect with correct dependencies ---
     useEffect(() => {
-        if (isMock) { setAuth({ status: 'authenticated' }); return; }
+        if (isMock) { 
+            setAuth({ status: 'authenticated' }); 
+            return; 
+        }
         
         const autoAuthenticate = async () => {
             const urlParams = new URLSearchParams(window.location.search);
@@ -75,20 +75,18 @@ export default function ParametersPanel({ isMock = false }) {
             }
 
             if (requestTokenFromUrl && statusFromUrl === 'success') {
-                enqueueSnackbar('Kite token detected, attempting to authenticate...', { variant: 'info' });
                 await handleAuthenticate(requestTokenFromUrl);
             } else if (statusFromUrl) {
                 const errorMessage = `Kite login failed or was cancelled. (Status: ${statusFromUrl})`;
                 enqueueSnackbar(errorMessage, { variant: 'error' });
                 await fetchStatus();
-            }
-            else {
+            } else {
                 await fetchStatus();
             }
         };
         
         autoAuthenticate();
-    }, [isMock]);
+    }, [isMock, handleAuthenticate, fetchStatus, enqueueSnackbar]); // <-- Correct dependency array
 
     const handleChange = (e) => {
         const { name, value, type, checked } = e.target;
