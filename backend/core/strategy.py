@@ -86,7 +86,7 @@ class Strategy:
         await self.manager.broadcast({'type': 'debug_log', 'payload': {'time': datetime.now().strftime('%H:%M:%S'), 'source': source, 'message': message}})
     
     async def _update_ui_status(self):
-        await self.manager.broadcast({'type': 'status_update', 'payload': {'connection': 'CONNECTED' if self.ticker_manager and self.ticker_manager.is_connected else 'DISCONNECTED', 'mode': self.trading_mode.upper(), 'indexPrice': self.prices.get(self.index_symbol, 0), 'trend': self.trend_state or '---'}})
+        await self.manager.broadcast({'type': 'status_update', 'payload': {'connection': 'CONNECTED' if self.ticker_manager and self.ticker_manager.is_connected else 'DISCONNECTED', 'mode': self.trading_mode.upper(), 'indexPrice': self.prices.get(self.index_symbol, 0), 'trend': self.trend_state or '---','indexName': self.index_name}})
     
     async def _update_ui_performance(self):
         await self.manager.broadcast({'type': 'daily_performance_update', 'payload': {'netPnl': self.daily_pnl, 'grossProfit': self.daily_profit, 'grossLoss': self.daily_loss, 'wins': self.performance_stats['winning_trades'], 'losses': self.performance_stats['losing_trades']}})
@@ -137,26 +137,36 @@ class Strategy:
         await self._log_debug("WebSocket", "Kite Ticker Disconnected.")
     
     async def handle_ticks_async(self, ticks):
-        if self.ticker_manager and not self.initial_subscription_done and any(t.get('instrument_token') == self.index_token for t in ticks):
-            self.prices[self.index_symbol] = next(t['last_price'] for t in ticks if t.get('instrument_token') == self.index_token)
-            await self._log_debug("WebSocket", "Index price received. Subscribing to full token list.")
-            tokens = self.get_all_option_tokens()
-            await self.map_option_tokens(tokens)
-            self.ticker_manager.resubscribe(tokens)
-            self.initial_subscription_done = True
-        for tick in ticks:
-            token, ltp = tick.get('instrument_token'), tick.get('last_price')
-            if token is not None and ltp is not None and (symbol := self.token_to_symbol.get(token)):
-                self.prices[symbol] = ltp
-                self.update_price_history(symbol, ltp)
-                await self.update_candle_and_indicators(ltp, symbol)
-                if self.position and self.position['symbol'] == symbol:
-                    await self.evaluate_exit_logic()
-        if datetime.now().second % 2 == 0:
-            await self._update_ui_status()
-            await self._update_ui_option_chain()
-            await self._update_ui_chart_data()
-        
+        try:
+            if self.ticker_manager and not self.initial_subscription_done and any(t.get('instrument_token') == self.index_token for t in ticks):
+                self.prices[self.index_symbol] = next(t['last_price'] for t in ticks if t.get('instrument_token') == self.index_token)
+                await self._log_debug("WebSocket", "Index price received. Subscribing to full token list.")
+                tokens = self.get_all_option_tokens()
+                await self.map_option_tokens(tokens)
+                self.ticker_manager.resubscribe(tokens)
+                self.initial_subscription_done = True
+            
+            for tick in ticks:
+                # This ensures one bad tick doesn't crash the whole loop
+                try:
+                    token, ltp = tick.get('instrument_token'), tick.get('last_price')
+                    if token is not None and ltp is not None and (symbol := self.token_to_symbol.get(token)):
+                        self.prices[symbol] = ltp
+                        self.update_price_history(symbol, ltp)
+                        await self.update_candle_and_indicators(ltp, symbol)
+                        if self.position and self.position['symbol'] == symbol:
+                            await self.evaluate_exit_logic()
+                except Exception as e:
+                    await self._log_debug("Tick Error", f"Error processing tick {tick.get('instrument_token')}: {e}")
+
+            if datetime.now().second % 2 == 0:
+                await self._update_ui_status()
+                await self._update_ui_option_chain()
+                await self._update_ui_chart_data()
+        except Exception as e:
+            await self._log_debug("Tick Handler Error", f"Critical error in handle_ticks_async: {e}")
+
+
     # --- Data and State Management ---
     async def bootstrap_data(self):
         try:
