@@ -100,7 +100,10 @@ class Strategy:
         await self.manager.broadcast({'type': 'debug_log', 'payload': {'time': datetime.now().strftime('%H:%M:%S'), 'source': source, 'message': message}})
     
     async def _update_ui_status(self):
+        # --- NEW: Added print statement for debugging ---
+        print("DEBUG: Preparing to send 'status_update'")
         await self.manager.broadcast({'type': 'status_update', 'payload': {'connection': 'CONNECTED' if self.ticker_manager and self.ticker_manager.is_connected else 'DISCONNECTED', 'mode': self.trading_mode.upper(), 'indexPrice': self.prices.get(self.index_symbol, 0), 'trend': self.trend_state or '---'}})
+
     
     async def _update_ui_performance(self):
         await self.manager.broadcast({'type': 'daily_performance_update', 'payload': {'netPnl': self.daily_pnl, 'grossProfit': self.daily_profit, 'grossLoss': self.daily_loss, 'wins': self.performance_stats['winning_trades'], 'losses': self.performance_stats['losing_trades']}})
@@ -149,6 +152,8 @@ class Strategy:
         await self._update_ui_status(); await self._log_debug("WebSocket", "Kite Ticker Disconnected.")
     
     async def handle_ticks_async(self, ticks):
+        # --- NEW: Added print statement for debugging ---
+        print(f"DEBUG: Tick data received at {datetime.now().time()}")
         if self.ticker_manager and not self.initial_subscription_done and any(t.get('instrument_token') == self.index_token for t in ticks):
             self.prices[self.index_symbol] = next(t['last_price'] for t in ticks if t.get('instrument_token') == self.index_token)
             await self._log_debug("WebSocket", "Index price received. Subscribing to full token list.")
@@ -165,7 +170,9 @@ class Strategy:
                 if self.position and self.position['symbol'] == symbol:
                     await self.evaluate_exit_logic()
         if datetime.now().second % 2 == 0:
-            await self._update_ui_status(); await self._update_ui_option_chain(); await self._update_ui_chart_data()
+            await self._update_ui_status() # This is the periodic call
+            await self._update_ui_option_chain()
+            await self._update_ui_chart_data()
         
     # --- Data and State Management ---
     async def bootstrap_data(self):
