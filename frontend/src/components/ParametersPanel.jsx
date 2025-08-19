@@ -18,36 +18,9 @@ export default function ParametersPanel({ isMock = false }) {
     const [auth, setAuth] = useState({ status: 'loading', url: '', user: '' });
     const [loading, setLoading] = useState(false);
     const [botRunning, setBotRunning] = useState(false);
-
-    // --- UPDATED: Simplified handleAuthenticate logic ---
-    const handleAuthenticate = useCallback(async (token) => {
-        setLoading(true);
-        try {
-            const response = await fetch('http://localhost:8000/api/authenticate', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ request_token: token })
-            });
-            
-            const data = await response.json();
-            if (!response.ok) {
-                // The new backend HTTPException sends the error in 'detail'
-                throw new Error(data.detail || 'Authentication failed.');
-            }
-            
-            enqueueSnackbar('Authentication successful!', { variant: 'success' });
-            
-            // --- THE FIX ---
-            // We now get the user ID directly from the auth response.
-            // We set the state and DO NOT make another network call.
-            setAuth({ status: 'authenticated', user: data.user });
-
-        } catch (error) {
-            console.error("Auth failed", error);
-            enqueueSnackbar(error.message, { variant: 'error' });
-        }
-        setLoading(false);
-    }, [enqueueSnackbar]); // Simplified dependencies
+    
+    // State for the manually pasted request token
+    const [reqToken, setReqToken] = useState('');
 
     const fetchStatus = useCallback(async () => {
         try {
@@ -61,37 +34,53 @@ export default function ParametersPanel({ isMock = false }) {
         }
     }, [enqueueSnackbar]);
 
+    // Simplified useEffect to only check status on load
     useEffect(() => {
-        if (isMock) { setAuth({ status: 'authenticated' }); return; }
-        
-        const autoAuthenticate = async () => {
-            const urlParams = new URLSearchParams(window.location.search);
-            const requestTokenFromUrl = urlParams.get('request_token');
-            const statusFromUrl = urlParams.get('status');
+        if (isMock) { 
+            setAuth({ status: 'authenticated' }); 
+            return; 
+        }
+        fetchStatus();
+    }, [isMock, fetchStatus]);
 
-            if(requestTokenFromUrl || statusFromUrl) {
-                window.history.replaceState({}, document.title, window.location.pathname);
+    // Renamed function for clarity, uses the `reqToken` state
+    const handleManualAuthenticate = async () => {
+        if (!reqToken.trim()) {
+            enqueueSnackbar('Please paste the request token from Kite.', { variant: 'warning' });
+            return;
+        }
+        setLoading(true);
+        try {
+            const response = await fetch('http://localhost:8000/api/authenticate', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ request_token: reqToken })
+            });
+            
+            const data = await response.json();
+            if (!response.ok) {
+                throw new Error(data.detail || 'Authentication failed.');
             }
+            
+            enqueueSnackbar('Authentication successful!', { variant: 'success' });
+            setAuth({ status: 'authenticated', user: data.user });
 
-            if (requestTokenFromUrl && statusFromUrl === 'success') {
-                await handleAuthenticate(requestTokenFromUrl);
-            } else if (statusFromUrl) {
-                const errorMessage = `Kite login failed or was cancelled. (Status: ${statusFromUrl})`;
-                enqueueSnackbar(errorMessage, { variant: 'error' });
-                await fetchStatus();
-            } else {
-                await fetchStatus();
-            }
-        };
-        
-        autoAuthenticate();
-    }, [isMock, handleAuthenticate, fetchStatus, enqueueSnackbar]);
+        } catch (error) {
+            console.error("Auth failed", error);
+            enqueueSnackbar(error.message, { variant: 'error' });
+            await fetchStatus();
+        }
+        setLoading(false);
+    };
 
-    // ... (The rest of the file remains the same as the last version)
     const handleChange = (e) => {
         const { name, value, type, checked } = e.target;
-        setParams(prev => ({ ...prev, [name]: type === 'checkbox' ? checked : value }));
+        setParams(prev => ({ 
+            ...prev, 
+            [name]: type === 'checkbox' ? checked : value 
+        }));
     };
+    
     const handleStartStop = async () => {
         if (isMock) { setBotRunning(!botRunning); return; }
         setLoading(true);
@@ -113,16 +102,45 @@ export default function ParametersPanel({ isMock = false }) {
         setLoading(false);
     };
 
-    if (auth.status === 'loading') return <Paper sx={{ p: 2, textAlign: 'center' }}><CircularProgress /></Paper>;
+    if (auth.status === 'loading') {
+        return <Paper sx={{ p: 2, textAlign: 'center' }}><CircularProgress /></Paper>;
+    }
 
     if (auth.status !== 'authenticated') {
         return (
             <Paper elevation={3} sx={{ p: 2 }}>
-                <Typography sx={{mb: 2}}>Authentication Required</Typography>
-                <Button fullWidth variant="contained" href={auth.login_url}>Login with Kite</Button>
-                <Box sx={{mt: 2, p: 1, border: '1px dashed grey', borderRadius: 1}}>
-                    <Typography variant="caption">After logging in, you will be redirected back here for automatic authentication.</Typography>
-                </Box>
+                <Typography variant="h6" sx={{mb: 2}}>Authentication Required</Typography>
+                <Typography variant="body2" sx={{mb: 1}}>1. Click the button below to log in with Kite in a new tab.</Typography>
+                <Button 
+                    fullWidth 
+                    variant="contained" 
+                    href={auth.login_url} 
+                    target="_blank"
+                >
+                    Login with Kite
+                </Button>
+
+                <Typography variant="body2" sx={{mt: 3, mb: 1}}>2. After logging in, copy the `request_token` from the URL and paste it here.</Typography>
+                <TextField 
+                    fullWidth
+                    margin="normal"
+                    label="Paste Request Token here"
+                    value={reqToken}
+                    onChange={e => setReqToken(e.target.value)}
+                    variant="outlined"
+                    size="small"
+                />
+
+                <Button 
+                    fullWidth 
+                    variant="contained" 
+                    color="primary" 
+                    sx={{ mt: 1 }}
+                    onClick={handleManualAuthenticate} 
+                    disabled={loading || !reqToken}
+                >
+                    {loading ? <CircularProgress size={24} /> : 'Authenticate'}
+                </Button>
             </Paper>
         );
     }
@@ -147,21 +165,46 @@ export default function ParametersPanel({ isMock = false }) {
                         {field.type === 'select' ? (
                             <FormControl fullWidth size="small">
                                 <InputLabel>{field.label}</InputLabel>
-                                <Select name={field.name} value={params[field.name]} label={field.label} onChange={handleChange} disabled={botRunning}>
+                                <Select
+                                    name={field.name}
+                                    value={params[field.name]}
+                                    label={field.label}
+                                    onChange={handleChange}
+                                    disabled={botRunning}
+                                >
                                     {field.options.map(opt => <MenuItem key={opt} value={opt}>{opt}</MenuItem>)}
                                 </Select>
                             </FormControl>
                         ) : (
-                            <TextField name={field.name} label={field.label} type="number" value={params[field.name]} onChange={handleChange} size="small" fullWidth disabled={botRunning}/>
+                            <TextField
+                                name={field.name}
+                                label={field.label}
+                                type="number"
+                                value={params[field.name]}
+                                onChange={handleChange}
+                                size="small"
+                                fullWidth
+                                disabled={botRunning}
+                            />
                         )}
                     </Grid>
                 ))}
                 <Grid item xs={12}>
-                    <FormControlLabel control={<Checkbox name="auto_scan_uoa" checked={params.auto_scan_uoa} onChange={handleChange} disabled={botRunning} />} label="Enable Auto-Scan for UOA" />
+                    <FormControlLabel 
+                        control={<Checkbox name="auto_scan_uoa" checked={params.auto_scan_uoa} onChange={handleChange} disabled={botRunning} />} 
+                        label="Enable Auto-Scan for UOA" 
+                    />
                 </Grid>
             </Grid>
             <Button fullWidth sx={{ mt: 2 }} variant="outlined" disabled={botRunning}>Apply Changes</Button>
-            <Button fullWidth sx={{ mt: 1 }} variant="contained" color={botRunning ? "error" : "success"} onClick={handleStartStop} disabled={loading}>
+            <Button
+                fullWidth
+                sx={{ mt: 1 }}
+                variant="contained"
+                color={botRunning ? "error" : "success"}
+                onClick={handleStartStop}
+                disabled={loading}
+            >
                 {loading ? <CircularProgress size={24} /> : (botRunning ? 'Stop Trading Bot' : 'Start Trading Bot')}
             </Button>
         </Paper>
