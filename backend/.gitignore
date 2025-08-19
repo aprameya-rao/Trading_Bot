@@ -1,0 +1,21 @@
+# Virtual Environment
+venv/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Database file
+trading_data.db
+
+# Sensitive Files (VERY IMPORTANT)
+.env
+access_token.json
+strategy_params.json
+
+# IDE & System Files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
