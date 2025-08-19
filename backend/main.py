@@ -119,13 +119,17 @@ async def start_bot(start_request: StartRequest):
 
     print(f"Starting bot with params: {start_request.params}")
     
+    # --- NEW: Get the running event loop from the main thread ---
+    main_event_loop = asyncio.get_running_loop()
+
     strategy_instance = Strategy(
         params=start_request.params, 
         manager=manager, 
         selected_index=start_request.selectedIndex
     )
     
-    ticker_manager_instance = KiteTickerManager(strategy_instance)
+    # --- UPDATED: Pass the main loop to the manager's constructor ---
+    ticker_manager_instance = KiteTickerManager(strategy_instance, main_event_loop)
     strategy_instance.ticker_manager = ticker_manager_instance
     
     await strategy_instance.run()
