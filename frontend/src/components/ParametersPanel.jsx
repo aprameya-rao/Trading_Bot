@@ -34,7 +34,15 @@ export default function ParametersPanel({ isMock = false }) {
             }
             
             enqueueSnackbar('Authentication successful!', { variant: 'success' });
+            
+            // --- THE FIX IS HERE ---
+            // We explicitly set the status to 'authenticated' to force the UI to update
+            // immediately, without waiting for the fetchStatus() network call.
+            setAuth({ status: 'authenticated' }); 
+
+            // We still call fetchStatus to get the latest user details, but the UI has already updated.
             await fetchStatus();
+
         } catch (error) {
             console.error("Auth failed", error);
             enqueueSnackbar(error.message, { variant: 'error' });
