@@ -5,7 +5,6 @@ import { useSnackbar } from 'notistack';
 export default function ParametersPanel({ isMock = false }) {
     const { enqueueSnackbar } = useSnackbar();
     
-    // --- FIX: Renamed 'url' to 'login_url' for consistency with the API response ---
     const [auth, setAuth] = useState({ 
         status: 'loading', 
         login_url: '', 
@@ -22,6 +21,8 @@ export default function ParametersPanel({ isMock = false }) {
         trailing_sl_percent: 1, 
         daily_sl: -2000, 
         daily_pt: 4000, 
+        partial_profit_pct: 5,
+        partial_exit_pct: 50,
         auto_scan_uoa: false 
     });
     
@@ -34,7 +35,6 @@ export default function ParametersPanel({ isMock = false }) {
             const res = await fetch('http://localhost:8000/api/status');
             const data = await res.json();
             
-            // --- FIX: Added a safety check for the login URL ---
             if (data.status === 'unauthenticated' && !data.login_url) {
                 console.error("Login URL not received from backend!", data);
                 enqueueSnackbar('Error: Login URL not provided by the server.', { variant: 'error' });
@@ -128,7 +128,7 @@ export default function ParametersPanel({ isMock = false }) {
                     variant="contained" 
                     href={auth.login_url} 
                     target="_blank"
-                    disabled={!auth.login_url} // Added for extra safety
+                    disabled={!auth.login_url}
                 >
                     Login with Kite
                 </Button>
@@ -168,6 +168,8 @@ export default function ParametersPanel({ isMock = false }) {
         { label: 'SL (%)', name: 'trailing_sl_percent', type: 'number' },
         { label: 'Daily SL (₹)', name: 'daily_sl', type: 'number' },
         { label: 'Daily PT (₹)', name: 'daily_pt', type: 'number' },
+        { label: 'Partial Profit %', name: 'partial_profit_pct', type: 'number'},
+        { label: 'Partial Exit %', name: 'partial_exit_pct', type: 'number'},
     ];
 
     return (
