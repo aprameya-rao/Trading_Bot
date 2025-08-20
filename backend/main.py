@@ -1,8 +1,10 @@
 # backend/main.py
 import asyncio
 import sqlite3
+import json
+import pandas as pd
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
@@ -29,7 +31,8 @@ async def lifespan(app: FastAPI):
     # Code to run on shutdown
     print("Application shutdown...")
     if ticker_manager_instance:
-        ticker_manager_instance.stop()
+        # --- MODIFIED: Await the async stop method ---
+        await ticker_manager_instance.stop()
     if uoa_scanner_task:
         uoa_scanner_task.cancel()
     if strategy_instance and strategy_instance.ui_update_task:
@@ -100,6 +103,16 @@ async def authenticate(token_request: TokenRequest):
         return {"status": "success", "message": "Authentication successful.", "user": data.get('user_id')}
     raise HTTPException(status_code=400, detail=data)
 
+@app.get("/api/trade_history")
+async def get_trade_history():
+    try:
+        conn = sqlite3.connect('trading_data.db')
+        df = pd.read_sql_query("SELECT * FROM trades ORDER BY timestamp ASC", conn)
+        conn.close()
+        return df.to_dict('records')
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch trade history: {e}")
+
 @app.post("/api/optimize")
 async def run_optimizer():
     optimizer = OptimizerBot()
@@ -134,7 +147,9 @@ async def start_bot(start_request: StartRequest):
 async def stop_bot():
     global ticker_manager_instance, strategy_instance, uoa_scanner_task
     if ticker_manager_instance and ticker_manager_instance.is_connected:
-        ticker_manager_instance.stop()
+        # --- MODIFIED: Await the new async stop method ---
+        await ticker_manager_instance.stop()
+        
         if strategy_instance and strategy_instance.ui_update_task:
             strategy_instance.ui_update_task.cancel()
         
@@ -162,9 +177,25 @@ async def websocket_endpoint(websocket: WebSocket):
     await manager.connect(websocket)
     try:
         while True:
-            await websocket.receive_text()
+            data = await websocket.receive_text()
+            message = json.loads(data)
+            
+            if message.get("type") == "add_to_watchlist":
+                if strategy_instance:
+                    payload = message.get("payload", {})
+                    strike = payload.get("strike")
+                    side = payload.get("side")
+                    if strike and side:
+                        asyncio.create_task(strategy_instance.add_to_watchlist(side, strike))
+                else:
+                    print("Warning: Received 'add_to_watchlist' but bot is not running.")
+
     except WebSocketDisconnect:
         manager.disconnect()
+    except Exception as e:
+        print(f"Error in websocket endpoint: {e}")
+        manager.disconnect()
+
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

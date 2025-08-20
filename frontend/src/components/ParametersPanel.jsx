@@ -4,6 +4,14 @@ import { useSnackbar } from 'notistack';
 
 export default function ParametersPanel({ isMock = false }) {
     const { enqueueSnackbar } = useSnackbar();
+    
+    // --- FIX: Renamed 'url' to 'login_url' for consistency with the API response ---
+    const [auth, setAuth] = useState({ 
+        status: 'loading', 
+        login_url: '', 
+        user: '' 
+    });
+    
     const [params, setParams] = useState({ 
         selectedIndex: 'SENSEX', 
         trading_mode: 'Paper Trading', 
@@ -16,20 +24,26 @@ export default function ParametersPanel({ isMock = false }) {
         daily_pt: 4000, 
         auto_scan_uoa: false 
     });
-    const [auth, setAuth] = useState({ status: 'loading', url: '', user: '' });
+    
     const [loading, setLoading] = useState(false);
     const [botRunning, setBotRunning] = useState(false);
-    
     const [reqToken, setReqToken] = useState('');
 
     const fetchStatus = useCallback(async () => {
         try {
             const res = await fetch('http://localhost:8000/api/status');
             const data = await res.json();
+            
+            // --- FIX: Added a safety check for the login URL ---
+            if (data.status === 'unauthenticated' && !data.login_url) {
+                console.error("Login URL not received from backend!", data);
+                enqueueSnackbar('Error: Login URL not provided by the server.', { variant: 'error' });
+            }
+            
             setAuth(data);
         } catch (error) {
             console.error("Failed to fetch API status", error);
-            setAuth({ status: 'error' });
+            setAuth({ status: 'error', login_url: '' });
             enqueueSnackbar('Failed to connect to the backend server.', { variant: 'error' });
         }
     }, [enqueueSnackbar]);
@@ -61,7 +75,7 @@ export default function ParametersPanel({ isMock = false }) {
             }
             
             enqueueSnackbar('Authentication successful!', { variant: 'success' });
-            setAuth({ status: 'authenticated', user: data.user });
+            setAuth({ status: 'authenticated', user: data.user, login_url: '' });
 
         } catch (error) {
             console.error("Auth failed", error);
@@ -114,6 +128,7 @@ export default function ParametersPanel({ isMock = false }) {
                     variant="contained" 
                     href={auth.login_url} 
                     target="_blank"
+                    disabled={!auth.login_url} // Added for extra safety
                 >
                     Login with Kite
                 </Button>
