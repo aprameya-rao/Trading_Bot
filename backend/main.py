@@ -1,6 +1,7 @@
 # backend/main.py
 import asyncio
 import sqlite3
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -11,9 +12,30 @@ from core.kite import kite, generate_session_and_set_token, access_token
 from core.websocket_manager import manager
 from core.strategy import Strategy
 from core.kite_ticker_manager import KiteTickerManager
-from core.optimiser import OptimizerBot # <-- NEW IMPORT
+from core.optimiser import OptimizerBot
 
-# --- NEW: Database Setup on Startup ---
+# --- Global state management ---
+strategy_instance: Strategy | None = None
+ticker_manager_instance: KiteTickerManager | None = None
+uoa_scanner_task: asyncio.Task | None = None
+
+# --- Lifespan Event Handler ---
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Code to run on startup
+    print("Application startup...")
+    setup_database()
+    yield
+    # Code to run on shutdown
+    print("Application shutdown...")
+    if ticker_manager_instance:
+        ticker_manager_instance.stop()
+    if uoa_scanner_task:
+        uoa_scanner_task.cancel()
+    if strategy_instance and strategy_instance.ui_update_task:
+        strategy_instance.ui_update_task.cancel()
+    print("Shutdown tasks complete.")
+
 def setup_database(db_path='trading_data.db'):
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
@@ -35,9 +57,7 @@ def setup_database(db_path='trading_data.db'):
     conn.close()
     print("Database setup complete.")
 
-setup_database()
-
-app = FastAPI()
+app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -47,11 +67,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- UPDATED: Global state management ---
-strategy_instance: Strategy | None = None
-ticker_manager_instance: KiteTickerManager | None = None
-uoa_scanner_task: asyncio.Task | None = None
-
 class TokenRequest(BaseModel):
     request_token: str
 
@@ -59,29 +74,18 @@ class StartRequest(BaseModel):
     params: dict
     selectedIndex: str
 
-# --- NEW: Background Task for UOA Scanner ---
 async def uoa_scanner_worker():
     while True:
         try:
             if strategy_instance and strategy_instance.params.get('auto_scan_uoa'):
                 await strategy_instance.scan_for_unusual_activity()
-            # Scan every 5 minutes (300 seconds)
             await asyncio.sleep(300)
         except asyncio.CancelledError:
             print("UOA scanner task cancelled.")
             break
         except Exception as e:
             print(f"Error in UOA scanner worker: {e}")
-            await asyncio.sleep(60) # Wait a minute before retrying on error
-
-@app.on_event("shutdown")
-def shutdown_event():
-    global ticker_manager_instance
-    if ticker_manager_instance:
-        ticker_manager_instance.stop()
-    if uoa_scanner_task:
-        uoa_scanner_task.cancel()
-    print("Application shutdown.")
+            await asyncio.sleep(60)
 
 @app.get("/api/status")
 async def get_status():
@@ -91,16 +95,11 @@ async def get_status():
 
 @app.post("/api/authenticate")
 async def authenticate(token_request: TokenRequest):
-    # This now returns a tuple (success, data) where data can be a profile dict or error string
     success, data = generate_session_and_set_token(token_request.request_token)
     if success:
-        # --- MODIFIED: Return the user_id from the profile data ---
         return {"status": "success", "message": "Authentication successful.", "user": data.get('user_id')}
-    
-    # Use HTTPException for clearer error handling on the client side
     raise HTTPException(status_code=400, detail=data)
 
-# --- NEW: Endpoint for Optimizer ---
 @app.post("/api/optimize")
 async def run_optimizer():
     optimizer = OptimizerBot()
@@ -116,28 +115,19 @@ async def start_bot(start_request: StartRequest):
     global strategy_instance, ticker_manager_instance, uoa_scanner_task
     if ticker_manager_instance and ticker_manager_instance.is_connected:
         raise HTTPException(status_code=400, detail="Bot is already running.")
-
     print(f"Starting bot with params: {start_request.params}")
-    
-    # --- NEW: Get the running event loop from the main thread ---
     main_event_loop = asyncio.get_running_loop()
-
     strategy_instance = Strategy(
         params=start_request.params, 
         manager=manager, 
         selected_index=start_request.selectedIndex
     )
-    
-    # --- UPDATED: Pass the main loop to the manager's constructor ---
     ticker_manager_instance = KiteTickerManager(strategy_instance, main_event_loop)
     strategy_instance.ticker_manager = ticker_manager_instance
-    
     await strategy_instance.run()
     ticker_manager_instance.start()
-
     if not uoa_scanner_task or uoa_scanner_task.done():
         uoa_scanner_task = asyncio.create_task(uoa_scanner_worker())
-    
     return {"status": "success", "message": "Bot started."}
 
 @app.post("/api/stop")
@@ -145,6 +135,9 @@ async def stop_bot():
     global ticker_manager_instance, strategy_instance, uoa_scanner_task
     if ticker_manager_instance and ticker_manager_instance.is_connected:
         ticker_manager_instance.stop()
+        if strategy_instance and strategy_instance.ui_update_task:
+            strategy_instance.ui_update_task.cancel()
+        
         ticker_manager_instance = None
         strategy_instance = None
         if uoa_scanner_task:
@@ -152,6 +145,17 @@ async def stop_bot():
             uoa_scanner_task = None
         return {"status": "success", "message": "Bot stopped."}
     raise HTTPException(status_code=400, detail="Bot is not running.")
+
+@app.post("/api/manual_exit")
+async def manual_exit_trade():
+    global strategy_instance
+    if not strategy_instance:
+        raise HTTPException(status_code=400, detail="Bot is not running.")
+    if not strategy_instance.position:
+        raise HTTPException(status_code=400, detail="No active trade to exit.")
+    
+    await strategy_instance.exit_position("Manual Exit from UI")
+    return {"status": "success", "message": "Manual exit signal sent."}
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):

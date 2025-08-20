@@ -1,17 +1,18 @@
-# backend/core/kite.py
 import os
 import json
 from datetime import datetime
 from dotenv import load_dotenv
 from kiteconnect import KiteConnect
 
-DEV_MODE_ENABLED = False
-DEV_ACCESS_TOKEN = "PASTE_YOUR_VALID_ACCESS_TOKEN_HERE" 
-
 load_dotenv()
-API_KEY = os.getenv("API_KEY"); API_SECRET = os.getenv("API_SECRET")
+API_KEY = os.getenv("API_KEY")
+API_SECRET = os.getenv("API_SECRET")
+
 kite = KiteConnect(api_key=API_KEY)
 access_token = None
+
+DEV_MODE_ENABLED = False
+DEV_ACCESS_TOKEN = "PASTE_YOUR_VALID_ACCESS_TOKEN_HERE" 
 
 def save_access_token(token):
     if DEV_MODE_ENABLED: return
@@ -36,7 +37,6 @@ def set_access_token(token):
         profile = kite.profile()
         access_token = token
         print(f"Kite connection verified for user: {profile['user_id']}")
-        # --- MODIFIED: Return the full profile on success ---
         return True, profile
     except Exception as e:
         error_message = f"Error setting access token: {e}"
@@ -44,18 +44,17 @@ def set_access_token(token):
         access_token = None
         return False, str(e)
 
-# Replace this function in backend/core/kite.py
 def generate_session_and_set_token(request_token):
     try:
         session = kite.generate_session(request_token, api_secret=API_SECRET)
         token = session["access_token"]
         save_access_token(token)
-        # This will now return (True, profile_data) on success
         return set_access_token(token)
     except Exception as e:
         error_message = f"Authentication failed: {e}"
         print(error_message)
-
+        # --- FIX: Added the missing return statement here ---
+        return False, str(e)
 
 # --- Startup Check ---
 if DEV_MODE_ENABLED and DEV_ACCESS_TOKEN != "PASTE_YOUR_VALID_ACCESS_TOKEN_HERE":

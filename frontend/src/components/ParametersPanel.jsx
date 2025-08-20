@@ -8,7 +8,8 @@ export default function ParametersPanel({ isMock = false }) {
         selectedIndex: 'SENSEX', 
         trading_mode: 'Paper Trading', 
         aggressiveness: 'Moderate', 
-        start_capital: 50000, 
+        start_capital: 50000,
+        risk_per_trade_percent: 1.0,
         trailing_sl_points: 2, 
         trailing_sl_percent: 1, 
         daily_sl: -2000, 
@@ -19,7 +20,6 @@ export default function ParametersPanel({ isMock = false }) {
     const [loading, setLoading] = useState(false);
     const [botRunning, setBotRunning] = useState(false);
     
-    // State for the manually pasted request token
     const [reqToken, setReqToken] = useState('');
 
     const fetchStatus = useCallback(async () => {
@@ -34,7 +34,6 @@ export default function ParametersPanel({ isMock = false }) {
         }
     }, [enqueueSnackbar]);
 
-    // Simplified useEffect to only check status on load
     useEffect(() => {
         if (isMock) { 
             setAuth({ status: 'authenticated' }); 
@@ -43,7 +42,6 @@ export default function ParametersPanel({ isMock = false }) {
         fetchStatus();
     }, [isMock, fetchStatus]);
 
-    // Renamed function for clarity, uses the `reqToken` state
     const handleManualAuthenticate = async () => {
         if (!reqToken.trim()) {
             enqueueSnackbar('Please paste the request token from Kite.', { variant: 'warning' });
@@ -150,6 +148,7 @@ export default function ParametersPanel({ isMock = false }) {
         { label: 'Trading Mode', name: 'trading_mode', type: 'select', options: ['Paper Trading', 'Live Trading'] },
         { label: 'Aggressiveness', name: 'aggressiveness', type: 'select', options: ['Conservative', 'Moderate'] },
         { label: 'Capital', name: 'start_capital', type: 'number' },
+        { label: 'Risk Per Trade (%)', name: 'risk_per_trade_percent', type: 'number'},
         { label: 'SL (Points)', name: 'trailing_sl_points', type: 'number' },
         { label: 'SL (%)', name: 'trailing_sl_percent', type: 'number' },
         { label: 'Daily SL (₹)', name: 'daily_sl', type: 'number' },

@@ -1,7 +1,15 @@
-import React from 'react';
-import { Paper, Typography, Box, Grid, Button } from '@mui/material';
+import React, { useState } from 'react';
+import { Paper, Typography, Box, Grid, Button, CircularProgress } from '@mui/material';
 
-export default function CurrentTradePanel({ trade }) {
+export default function CurrentTradePanel({ trade, onManualExit }) {
+    const [loading, setLoading] = useState(false);
+
+    const handleExitClick = async () => {
+        setLoading(true);
+        await onManualExit();
+        setLoading(false);
+    };
+
     if (!trade) {
         return (
             <Paper elevation={3} sx={{ p: 2 }}>
@@ -21,7 +29,16 @@ export default function CurrentTradePanel({ trade }) {
                 <Grid item xs={6}><Typography>Trail SL: {trade.trail_sl.toFixed(2)}</Typography></Grid>
                 <Grid item xs={6}><Typography>Max Price: {trade.max_price.toFixed(2)}</Typography></Grid>
             </Grid>
-            <Button fullWidth variant="contained" color="error" sx={{ mt: 2 }}>Manual Exit Trade</Button>
+            <Button 
+                fullWidth 
+                variant="contained" 
+                color="error" 
+                sx={{ mt: 2 }} 
+                onClick={handleExitClick}
+                disabled={loading}
+            >
+                {loading ? <CircularProgress size={24} color="inherit" /> : 'Manual Exit Trade'}
+            </Button>
         </Paper>
     );
 }

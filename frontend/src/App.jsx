@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Grid, ThemeProvider, createTheme, CssBaseline, Box } from '@mui/material';
+import { useSnackbar } from 'notistack';
 import StatusPanel from './components/StatusPanel';
 import ParametersPanel from './components/ParametersPanel';
 import IntelligencePanel from './components/IntelligencePanel';
@@ -13,10 +14,11 @@ import { connectWebSocket, disconnectWebSocket } from './services/socket';
 
 const MOCK_MODE = false;
 
-const mockBotStatus = { connection: 'CONNECTED', mode: 'PAPER TRADING', indexPrice: 80690.87, trend: 'BEARISH' };
+// Mock data (can be removed if not needed for testing)
+const mockBotStatus = { connection: 'CONNECTED', mode: 'PAPER TRADING', indexPrice: 80690.87, trend: 'BEARISH', indexName: 'SENSEX' };
 const mockDailyPerformance = { netPnl: 1250.75, grossProfit: 2500, grossLoss: -1249.25, wins: 2, losses: 1 };
 const mockCurrentTrade = { symbol: 'SENSEX25SEP80700CE', entry_price: 268.25, pnl: 150.50, profit_pct: 10.5, trail_sl: 275.5, max_price: 290.0 };
-const mockDebugLogs = [ { time: '12:15:00', source: 'System', message: 'Mock mode enabled. Multi-pane chart active.' }, ];
+const mockDebugLogs = [ { time: '12:15:00', source: 'System', message: 'Mock mode enabled.' }, ];
 const mockTradeHistory = [ ['SENSEX25SEP80500PE', '10:15:32', 'Trend_Continuation', '150.20', '180.50', '454.50', 'Trailing SL'], ];
 const mockOptionChain = [ { strike: 80400, ce_ltp: 561.8, pe_ltp: 197.6 }, { strike: 80500, ce_ltp: 494.05, pe_ltp: 229.25 }, ];
 const mockUoaList = [{ symbol: 'SENSEX25SEP81000CE', type: 'CE', strike: '81000' }];
@@ -35,8 +37,9 @@ const lightTheme = createTheme({
 });
 
 function App() {
+    const { enqueueSnackbar } = useSnackbar();
     const [chartData, setChartData] = useState(null);
-    const [botStatus, setBotStatus] = useState({ connection: 'DISCONNECTED', mode: 'NOT STARTED', indexPrice: 0, trend: '---' });
+    const [botStatus, setBotStatus] = useState({ connection: 'DISCONNECTED', mode: 'NOT STARTED', indexPrice: 0, trend: '---', indexName: 'INDEX' });
     const [dailyPerformance, setDailyPerformance] = useState({ netPnl: 0, grossProfit: 0, grossLoss: 0, wins: 0, losses: 0 });
     const [currentTrade, setCurrentTrade] = useState(null);
     const [debugLogs, setDebugLogs] = useState([]);
@@ -64,27 +67,41 @@ function App() {
         connectWebSocket(handleSocketMessage); return () => disconnectWebSocket();
     }, []);
 
+    const handleManualExit = async () => {
+        if (window.confirm('Are you sure you want to manually exit the current trade?')) {
+            try {
+                const res = await fetch('http://localhost:8000/api/manual_exit', { method: 'POST' });
+                const data = await res.json();
+                if (!res.ok) { throw new Error(data.detail); }
+                enqueueSnackbar(data.message, { variant: 'warning' });
+            } catch (error) {
+                console.error("Manual exit failed", error);
+                enqueueSnackbar(error.message, { variant: 'error' });
+            }
+        }
+    };
+
     return (
         <ThemeProvider theme={lightTheme}>
             <CssBaseline />
-            <Box sx={{ p: 2, height: '100vh', boxSizing: 'border-box' }}>
-                <Grid container spacing={2} sx={{ height: '100%' }}>
+            <Box sx={{ p: 2 }}>
+                <Grid container spacing={2}>
                     {/* Left Pane */}
-                    <Grid item xs={12} md={3.5} container direction="column" spacing={2} wrap="nowrap" sx={{ height: '100%', overflowY: 'auto', overflowX: 'hidden', '&::-webkit-scrollbar': { width: '8px' }, '&::-webkit-scrollbar-track': { background: '#f1f1f1' }, '&::-webkit-scrollbar-thumb': { background: '#aaa', borderRadius: '4px' }, '&::-webkit-scrollbar-thumb:hover': { background: '#888' },}}>
+                    <Grid item xs={12} md={4} container direction="column" spacing={2} wrap="nowrap">
                         <Grid item><StatusPanel status={botStatus} socketStatus={socketStatus} /></Grid>
-                        <Grid item><CurrentTradePanel trade={currentTrade} /></Grid>
+                        <Grid item><CurrentTradePanel trade={currentTrade} onManualExit={handleManualExit} /></Grid>
                         <Grid item><ParametersPanel isMock={MOCK_MODE} /></Grid>
                         <Grid item><IntelligencePanel /></Grid>
                         <Grid item><PerformancePanel data={dailyPerformance} /></Grid>
                         <Grid item><UOAPanel list={uoaList} /></Grid>
                     </Grid>
+
                     {/* Right Pane */}
-                    <Grid item xs={12} md={8.5} sx={{ height: '100%', display: 'flex', flexDirection: 'column', gap: 2 }}>
-                        <Box sx={{ flexShrink: 0 }}>
-                            {/* The IndexChart component now has a default height of 450px */}
+                    <Grid item xs={12} md={8} sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                        <Box>
                             <IndexChart data={chartData} />
                         </Box>
-                        <Box sx={{ flexShrink: 0 }}>
+                        <Box>
                             <OptionChain data={optionChain} indexPrice={botStatus.indexPrice} />
                         </Box>
                         <Box sx={{ flexGrow: 1, minHeight: 0 }}>
