@@ -9,10 +9,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
 import os
+import signal
+from datetime import datetime
 
 from core.kite import kite, generate_session_and_set_token, access_token
 from core.websocket_manager import manager
-from core.strategy import Strategy
+from core.strategy import Strategy, MARKET_STANDARD_PARAMS
 from core.kite_ticker_manager import KiteTickerManager
 from core.optimiser import OptimizerBot
 
@@ -20,18 +22,18 @@ from core.optimiser import OptimizerBot
 strategy_instance: Strategy | None = None
 ticker_manager_instance: KiteTickerManager | None = None
 uoa_scanner_task: asyncio.Task | None = None
+bot_lock = asyncio.Lock()
 
 # --- Lifespan Event Handler ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Code to run on startup
     print("Application startup...")
-    setup_database()
+    setup_databases()
     yield
     # Code to run on shutdown
     print("Application shutdown...")
     if ticker_manager_instance:
-        # --- MODIFIED: Await the async stop method ---
         await ticker_manager_instance.stop()
     if uoa_scanner_task:
         uoa_scanner_task.cancel()
@@ -39,26 +41,53 @@ async def lifespan(app: FastAPI):
         strategy_instance.ui_update_task.cancel()
     print("Shutdown tasks complete.")
 
-def setup_database(db_path='trading_data.db'):
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS trades (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp TEXT NOT NULL,
-            trigger_reason TEXT NOT NULL,
-            symbol TEXT,
-            pnl REAL,
-            entry_price REAL,
-            exit_price REAL,
-            exit_reason TEXT,
-            trend_state TEXT,
-            atr REAL
-        )
-    ''')
-    conn.commit()
-    conn.close()
-    print("Database setup complete.")
+def setup_databases():
+    """
+    Creates both database files if they don't exist and clears the 'today'
+    database if it's a new day.
+    """
+    db_paths = ['trading_data_today.db', 'trading_data_all.db']
+    for db_path in db_paths:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS trades (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                trigger_reason TEXT NOT NULL,
+                symbol TEXT,
+                quantity INTEGER,
+                pnl REAL,
+                entry_price REAL,
+                exit_price REAL,
+                exit_reason TEXT,
+                trend_state TEXT,
+                atr REAL
+            )
+        ''')
+        conn.commit()
+        conn.close()
+    
+    try:
+        with open("last_run_date.txt", "r") as f:
+            last_run_date = f.read()
+    except FileNotFoundError:
+        last_run_date = ""
+
+    today_date = datetime.now().strftime("%Y-%m-%d")
+    if last_run_date != today_date:
+        print(f"New day detected. Clearing today's trade log ({db_paths[0]})...")
+        conn = sqlite3.connect(db_paths[0])
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM trades")
+        conn.commit()
+        conn.close()
+        with open("last_run_date.txt", "w") as f:
+            f.write(today_date)
+        print("Today's trade log cleared.")
+
+    print("Databases setup complete.")
+
 
 app = FastAPI(lifespan=lifespan)
 
@@ -105,13 +134,25 @@ async def authenticate(token_request: TokenRequest):
 
 @app.get("/api/trade_history")
 async def get_trade_history():
+    """Fetches trade history for the current day."""
     try:
-        conn = sqlite3.connect('trading_data.db')
+        conn = sqlite3.connect('trading_data_today.db')
         df = pd.read_sql_query("SELECT * FROM trades ORDER BY timestamp ASC", conn)
         conn.close()
         return df.to_dict('records')
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to fetch trade history: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch today's trade history: {e}")
+
+@app.get("/api/trade_history_all")
+async def get_all_trade_history():
+    """Fetches all trade history from the beginning of time."""
+    try:
+        conn = sqlite3.connect('trading_data_all.db')
+        df = pd.read_sql_query("SELECT * FROM trades ORDER BY timestamp ASC", conn)
+        conn.close()
+        return df.to_dict('records')
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch all trade history: {e}")
 
 @app.post("/api/optimize")
 async def run_optimizer():
@@ -123,43 +164,64 @@ async def run_optimizer():
     else:
         return {"status": "error", "report": justifications or ["Optimization failed."]}
 
+@app.post("/api/reset_params")
+async def reset_parameters():
+    try:
+        with open("strategy_params.json", "w") as f:
+            json.dump(MARKET_STANDARD_PARAMS, f, indent=4)
+        if strategy_instance:
+            strategy_instance.STRATEGY_PARAMS = MARKET_STANDARD_PARAMS.copy()
+            await strategy_instance._log_debug("System", "Parameters have been reset to market defaults.")
+        return {"status": "success", "message": "Parameters have been reset to market defaults."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to reset parameters: {e}")
+
 @app.post("/api/start")
 async def start_bot(start_request: StartRequest):
     global strategy_instance, ticker_manager_instance, uoa_scanner_task
-    if ticker_manager_instance and ticker_manager_instance.is_connected:
-        raise HTTPException(status_code=400, detail="Bot is already running.")
-    print(f"Starting bot with params: {start_request.params}")
-    main_event_loop = asyncio.get_running_loop()
-    strategy_instance = Strategy(
-        params=start_request.params, 
-        manager=manager, 
-        selected_index=start_request.selectedIndex
-    )
-    ticker_manager_instance = KiteTickerManager(strategy_instance, main_event_loop)
-    strategy_instance.ticker_manager = ticker_manager_instance
-    await strategy_instance.run()
-    ticker_manager_instance.start()
-    if not uoa_scanner_task or uoa_scanner_task.done():
-        uoa_scanner_task = asyncio.create_task(uoa_scanner_worker())
-    return {"status": "success", "message": "Bot started."}
+    async with bot_lock:
+        if ticker_manager_instance and ticker_manager_instance.is_connected:
+            raise HTTPException(status_code=400, detail="Bot is already running.")
+        
+        print(f"Starting bot with params: {start_request.params}")
+        main_event_loop = asyncio.get_running_loop()
+        strategy_instance = Strategy(
+            params=start_request.params, 
+            manager=manager, 
+            selected_index=start_request.selectedIndex
+        )
+        ticker_manager_instance = KiteTickerManager(strategy_instance, main_event_loop)
+        strategy_instance.ticker_manager = ticker_manager_instance
+        await strategy_instance.run()
+        ticker_manager_instance.start()
+        
+        if not uoa_scanner_task or uoa_scanner_task.done():
+            uoa_scanner_task = asyncio.create_task(uoa_scanner_worker())
+            
+        return {"status": "success", "message": "Bot started."}
 
 @app.post("/api/stop")
 async def stop_bot():
     global ticker_manager_instance, strategy_instance, uoa_scanner_task
-    if ticker_manager_instance and ticker_manager_instance.is_connected:
-        # --- MODIFIED: Await the new async stop method ---
+    async with bot_lock:
+        if not (ticker_manager_instance and ticker_manager_instance.is_connected):
+            raise HTTPException(status_code=400, detail="Bot is not running.")
+
+        print("Stopping bot...")
         await ticker_manager_instance.stop()
         
         if strategy_instance and strategy_instance.ui_update_task:
             strategy_instance.ui_update_task.cancel()
         
-        ticker_manager_instance = None
-        strategy_instance = None
         if uoa_scanner_task:
             uoa_scanner_task.cancel()
-            uoa_scanner_task = None
+        
+        ticker_manager_instance = None
+        strategy_instance = None
+        uoa_scanner_task = None
+        
+        print("Bot stopped successfully.")
         return {"status": "success", "message": "Bot stopped."}
-    raise HTTPException(status_code=400, detail="Bot is not running.")
 
 @app.post("/api/manual_exit")
 async def manual_exit_trade():

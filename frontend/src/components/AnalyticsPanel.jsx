@@ -46,7 +46,7 @@ export default function AnalyticsPanel() {
     useEffect(() => {
         const fetchAndCalculateStats = async () => {
             try {
-                const response = await fetch('http://localhost:8000/api/trade_history');
+                const response = await fetch('http://localhost:8000/api/trade_history_all');
                 if (!response.ok) throw new Error('Failed to fetch trade history');
                 
                 const trades = await response.json();
@@ -74,7 +74,6 @@ export default function AnalyticsPanel() {
                         losingTrades++;
                     }
                     
-                    // For equity curve and drawdown
                     const tradeDate = new Date(trade.timestamp);
                     const unixTime = Math.floor(tradeDate.getTime() / 1000);
                     equityCurve.push({ time: unixTime, value: totalPnl });
@@ -151,6 +150,7 @@ export default function AnalyticsPanel() {
                         <TableRow>
                             <TableCell>Timestamp</TableCell>
                             <TableCell>Symbol</TableCell>
+                            <TableCell>Qty</TableCell>
                             <TableCell>Trigger</TableCell>
                             <TableCell align="right">Entry</TableCell>
                             <TableCell align="right">Exit</TableCell>
@@ -162,6 +162,7 @@ export default function AnalyticsPanel() {
                             <TableRow key={trade.id}>
                                 <TableCell>{new Date(trade.timestamp).toLocaleString()}</TableCell>
                                 <TableCell>{trade.symbol}</TableCell>
+                                <TableCell>{trade.quantity}</TableCell>
                                 <TableCell>{trade.trigger_reason}</TableCell>
                                 <TableCell align="right">{trade.entry_price.toFixed(2)}</TableCell>
                                 <TableCell align="right">{trade.exit_price.toFixed(2)}</TableCell>

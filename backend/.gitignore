@@ -13,7 +13,8 @@ trading_data.db
 .env
 access_token.json
 strategy_params.json
-trading_data.db
+trading_data_all.db
+trading_data_today.db
 
 # IDE & System Files
 .vscode/

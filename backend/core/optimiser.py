@@ -5,7 +5,8 @@ import pandas as pd
 import asyncio
 
 class OptimizerBot:
-    def __init__(self, db_path='trading_data.db', params_path='strategy_params.json'):
+    # --- MODIFIED: Point to the 'all' database by default ---
+    def __init__(self, db_path='trading_data_all.db', params_path='strategy_params.json'):
         self.db_path = db_path
         self.params_path = params_path
         self.justifications = []

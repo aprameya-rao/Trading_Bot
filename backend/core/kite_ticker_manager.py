@@ -58,9 +58,8 @@ class KiteTickerManager:
 
     async def stop(self):
         print(">>> KITE TICKER MANAGER: 'stop' method called.")
-        if self.is_connected:
+        if self.is_connected and self.kws:
             print(">>> KITE TICKER MANAGER: Closing connection.")
-            # --- MODIFIED: Removed the incorrect 'timeout' argument ---
             self.kws.close()
             try:
                 print(">>> KITE TICKER MANAGER: Waiting for disconnection confirmation...")
@@ -68,11 +67,14 @@ class KiteTickerManager:
                 print(">>> KITE TICKER MANAGER: Disconnection confirmed by event.")
             except asyncio.TimeoutError:
                 print(">>> KITE TICKER MANAGER: Warning: Timed out waiting for ticker to close.")
+            finally:
+                # --- NEW: Explicitly dereference the kws object to aid garbage collection ---
+                self.kws = None
         else:
             print(">>> KITE TICKER MANAGER: 'stop' called, but not connected.")
             
     def resubscribe(self, tokens):
-        if self.is_connected:
+        if self.is_connected and self.kws:
             print(f"Resubscribing to {len(tokens)} tokens.")
             self.kws.subscribe(tokens)
             self.kws.set_mode(self.kws.MODE_LTP, tokens)

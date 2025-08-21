@@ -49,6 +49,12 @@ INDEX_CONFIG = {
     "SENSEX": {"name": "SENSEX", "token": 265, "symbol": "BSE:SENSEX", "strike_step": 100, "exchange": "BFO"},
 }
 
+MARKET_STANDARD_PARAMS = {
+    'wma_period': 9, 'sma_period': 9, 'rsi_period': 9, 'rsi_signal_period': 3,
+    'rsi_angle_lookback': 2, 'rsi_angle_threshold': 15.0, 'atr_period': 14,
+    'min_atr_value': 4, 'ma_gap_threshold_pct': 0.05
+}
+
 
 class Strategy:
     def __init__(self, params, manager: ConnectionManager, selected_index="SENSEX"):
@@ -57,7 +63,8 @@ class Strategy:
         self.is_backtest = False
         self.ticker_manager: Optional["KiteTickerManager"] = None
         self.config = INDEX_CONFIG[selected_index]
-        self.db_path = "trading_data.db"
+        self.today_db_path = "trading_data_today.db"
+        self.all_db_path = "trading_data_all.db"
         self.ui_update_task: Optional[asyncio.Task] = None
 
         try:
@@ -85,7 +92,7 @@ class Strategy:
         try:
             with open("strategy_params.json", "r") as f: self.STRATEGY_PARAMS = json.load(f)
         except FileNotFoundError:
-            self.STRATEGY_PARAMS = {"wma_period": 9, "sma_period": 9, "rsi_period": 9, "rsi_signal_period": 3, "rsi_angle_lookback": 2, "rsi_angle_threshold": 15.0, "atr_period": 14, "min_atr_value": 4, "ma_gap_threshold_pct": 0.05}
+            self.STRATEGY_PARAMS = MARKET_STANDARD_PARAMS.copy()
 
     async def run(self):
         await self._log_debug("System", "Strategy instance created.")
@@ -123,41 +130,22 @@ class Strategy:
         
     async def _update_ui_chart_data(self):
         temp_df = self.data_df.copy()
-
-    # Combine historical and live candle data
         if self.current_candle.get("minute"):
             live_candle_df = pd.DataFrame([self.current_candle], index=[self.current_candle["minute"]])
             temp_df = pd.concat([temp_df, live_candle_df])
-
-    # --- FINAL FIX: Explicitly remove any duplicate timestamps, keeping the last entry ---
-    # This is the most robust way to solve the "data must be asc ordered by time" error.
         if not temp_df.index.is_unique:
             temp_df = temp_df[~temp_df.index.duplicated(keep='last')]
-
-    # The original sort check can remain as a final safety measure.
         if not temp_df.index.is_monotonic_increasing: temp_df.sort_index(inplace=True)
-    
         chart_data = {"candles": [], "wma": [], "sma": [], "rsi": [], "rsi_sma": []}
         if not temp_df.empty:
             for index, row in temp_df.iterrows():
                 timestamp = int(index.timestamp())
                 chart_data["candles"].append({"time": timestamp, "open": row.get("open", 0), "high": row.get("high", 0), "low": row.get("low", 0), "close": row.get("close", 0)})
-            
-            # Only append indicator data if the value is a valid number
-                wma_val = row.get("wma")
-                sma_val = row.get("sma")
-                rsi_val = row.get("rsi")
-                rsi_sma_val = row.get("rsi_sma")
-            
-                if pd.notna(wma_val):
-                    chart_data["wma"].append({"time": timestamp, "value": wma_val})
-                if pd.notna(sma_val):
-                    chart_data["sma"].append({"time": timestamp, "value": sma_val})
-                if pd.notna(rsi_val):
-                    chart_data["rsi"].append({"time": timestamp, "value": rsi_val})
-                if pd.notna(rsi_sma_val):
-                    chart_data["rsi_sma"].append({"time": timestamp, "value": rsi_sma_val})
-
+                wma_val = row.get("wma"); sma_val = row.get("sma"); rsi_val = row.get("rsi"); rsi_sma_val = row.get("rsi_sma")
+                if pd.notna(wma_val): chart_data["wma"].append({"time": timestamp, "value": wma_val})
+                if pd.notna(sma_val): chart_data["sma"].append({"time": timestamp, "value": sma_val})
+                if pd.notna(rsi_val): chart_data["rsi"].append({"time": timestamp, "value": rsi_val})
+                if pd.notna(rsi_sma_val): chart_data["rsi_sma"].append({"time": timestamp, "value": rsi_sma_val})
         await self.manager.broadcast({"type": "chart_data_update", "payload": chart_data})
     
     async def on_ticker_connect(self):
@@ -224,18 +212,44 @@ class Strategy:
 
     async def log_trade_decision(self, trade_info):
         if self.is_backtest: return
+        
         def db_call():
-            conn = sqlite3.connect(self.db_path); cursor = conn.cursor()
             atr_value = (self.data_df.iloc[-1]["atr"] if not self.data_df.empty and "atr" in self.data_df.columns else 0)
             trade_info["atr"] = round(atr_value, 2)
-            columns, placeholders = ", ".join(trade_info.keys()), ", ".join("?" * len(trade_info))
-            sql = f"INSERT INTO trades ({columns}) VALUES ({placeholders})"; cursor.execute(sql, tuple(trade_info.values())); conn.commit(); conn.close()
-        await asyncio.to_thread(db_call); await self._log_debug("Database", f"Trade for {trade_info['symbol']} logged successfully.")
+            
+            columns = ", ".join(trade_info.keys())
+            placeholders = ", ".join("?" * len(trade_info))
+            sql = f"INSERT INTO trades ({columns}) VALUES ({placeholders})"
+            values = tuple(trade_info.values())
+
+            for db_path in [self.today_db_path, self.all_db_path]:
+                try:
+                    conn = sqlite3.connect(db_path)
+                    cursor = conn.cursor()
+                    cursor.execute(sql, values)
+                    conn.commit()
+                    conn.close()
+                except Exception as e:
+                    print(f"CRITICAL DB ERROR writing to {db_path}: {e}")
+
+        await asyncio.to_thread(db_call)
+        await self._log_debug("Database", f"Trade for {trade_info['symbol']} logged to both databases.")
 
     async def check_trade_entry(self):
         now = datetime.now()
         log_this_time = self.last_check_log_time is None or (now - self.last_check_log_time) > timedelta(seconds=10)
         if log_this_time: self.last_check_log_time = now; await self._log_debug("Check.Entry", "--- Running Entry Checks ---")
+        
+        if not self.data_df.empty:
+            last_atr = self.data_df.iloc[-1]['atr']
+            min_atr_multiplier = 2 if self.index_name == "SENSEX" else 1
+            min_atr = self.STRATEGY_PARAMS.get("min_atr_value", 4) * min_atr_multiplier
+            if pd.isna(last_atr) or last_atr < min_atr:
+                if log_this_time:
+                    atr_val_str = f"{last_atr:.2f}" if pd.notna(last_atr) else "N/A"
+                    await self._log_debug("Check.Entry", f"-> FAIL: ATR ({atr_val_str}) is below threshold ({min_atr}). Market too quiet.")
+                return
+
         if self.position:
             if log_this_time: await self._log_debug("Check.Entry", "-> FAIL: A position is already open."); return
         daily_sl, daily_pt = self.params.get("daily_sl", 0), self.params.get("daily_pt", 0)
@@ -333,9 +347,9 @@ class Strategy:
         if net_pnl > 0: self.daily_profit += net_pnl; play_profit_sound()
         
         reason = f"Partial Profit-Take ({self.next_partial_profit_level})"
-        trade_entry = (p["symbol"], datetime.now().strftime('%Y-%m-%d %H:%M:%S'), p["trigger_reason"], f"{p['entry_price']:.2f}", f"{exit_price:.2f}", f"{net_pnl:.2f}", reason)
+        trade_entry = (p["symbol"], qty_to_exit, datetime.now().strftime('%Y-%m-%d %H:%M:%S'), p["trigger_reason"], f"{p['entry_price']:.2f}", f"{exit_price:.2f}", f"{net_pnl:.2f}", reason)
         self.trade_log.append(trade_entry)
-        log_info = {"timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "trigger_reason": p["trigger_reason"], "symbol": p["symbol"], "pnl": round(net_pnl, 2), "entry_price": p["entry_price"], "exit_price": exit_price, "exit_reason": reason, "trend_state": self.trend_state}
+        log_info = {"timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "trigger_reason": p["trigger_reason"], "symbol": p["symbol"], "quantity": qty_to_exit, "pnl": round(net_pnl, 2), "entry_price": p["entry_price"], "exit_price": exit_price, "exit_reason": reason, "trend_state": self.trend_state}
         await self.log_trade_decision(log_info)
 
         p["qty"] -= qty_to_exit
@@ -356,9 +370,9 @@ class Strategy:
         net_pnl = (exit_price - p["entry_price"]) * p["qty"]; self.daily_pnl += net_pnl
         if net_pnl > 0: self.performance_stats["winning_trades"] += 1; self.daily_profit += net_pnl; play_profit_sound()
         else: self.performance_stats["losing_trades"] += 1; self.daily_loss += net_pnl; play_loss_sound()
-        trade_entry = (p["symbol"], p["entry_time"], p["trigger_reason"], f"{p['entry_price']:.2f}", f"{exit_price:.2f}", f"{net_pnl:.2f}", reason)
+        trade_entry = (p["symbol"], p["qty"], p["entry_time"], p["trigger_reason"], f"{p['entry_price']:.2f}", f"{exit_price:.2f}", f"{net_pnl:.2f}", reason)
         self.trade_log.append(trade_entry)
-        log_info = {"timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "trigger_reason": p["trigger_reason"], "symbol": p["symbol"], "pnl": round(net_pnl, 2), "entry_price": p["entry_price"], "exit_price": exit_price, "exit_reason": reason, "trend_state": self.trend_state}
+        log_info = {"timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "trigger_reason": p["trigger_reason"], "symbol": p["symbol"], "quantity": p["qty"], "pnl": round(net_pnl, 2), "entry_price": p["entry_price"], "exit_price": exit_price, "exit_reason": reason, "trend_state": self.trend_state}
         await self.log_trade_decision(log_info)
         self.position = None; await self._update_ui_trade_status(); await self._update_ui_trade_log(); await self._update_ui_performance()
 
@@ -497,7 +511,6 @@ class Strategy:
                 opt = self.get_entry_option('CE')
                 if opt and self.is_price_rising(self.index_symbol) and self.is_price_rising(opt['tradingsymbol']): await self.take_trade('RSI_Immediate_CE', opt); return True
 
-            # --- FIX: Compare RSI to its own SMA (rsi_sma) instead of the price's SMA ---
             if last['rsi'] < last['rsi_sma'] and prev['rsi'] >= prev['rsi_sma']:
                 if log: await self._log_debug("Check.RSI", f"-> PASS: Bearish RSI crossover detected.")
                 if angle >= -angle_thresh:

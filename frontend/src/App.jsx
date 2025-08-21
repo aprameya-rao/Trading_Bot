@@ -14,21 +14,6 @@ import { connectWebSocket, disconnectWebSocket } from './services/socket';
 
 const MOCK_MODE = false;
 
-// Mock data (can be removed if not needed for testing)
-const mockBotStatus = { connection: 'CONNECTED', mode: 'PAPER TRADING', indexPrice: 80690.87, trend: 'BEARISH', indexName: 'SENSEX' };
-const mockDailyPerformance = { netPnl: 1250.75, grossProfit: 2500, grossLoss: -1249.25, wins: 2, losses: 1 };
-const mockCurrentTrade = { symbol: 'SENSEX25SEP80700CE', entry_price: 268.25, pnl: 150.50, profit_pct: 10.5, trail_sl: 275.5, max_price: 290.0 };
-const mockDebugLogs = [ { time: '12:15:00', source: 'System', message: 'Mock mode enabled.' }, ];
-const mockTradeHistory = [ ['SENSEX25SEP80500PE', '10:15:32', 'Trend_Continuation', '150.20', '180.50', '454.50', 'Trailing SL'], ];
-const mockOptionChain = [ { strike: 80400, ce_ltp: 561.8, pe_ltp: 197.6 }, { strike: 80500, ce_ltp: 494.05, pe_ltp: 229.25 }, ];
-const mockUoaList = [{ symbol: 'SENSEX25SEP81000CE', type: 'CE', strike: '81000' }];
-const mockChartData = {
-    candles: [ { time: 1755502800, open: 80650, high: 80700, low: 80640, close: 80680 }, { time: 1755503100, open: 80680, high: 80720, low: 80670, close: 80690 } ],
-    wma: [ { time: 1755502800, value: 80660 }, { time: 1755503100, value: 80675 } ],
-    sma: [ { time: 1755502800, value: 80655 }, { time: 1755503100, value: 80670 } ],
-    rsi: [ { time: 1755502800, value: 60 }, { time: 1755503100, value: 65 } ],
-    rsi_sma: [ { time: 1755502800, value: 58 }, { time: 1755503100, value: 62 } ]
-};
 
 const lightTheme = createTheme({
     palette: {
@@ -59,7 +44,8 @@ function App() {
             switch (data.type) {
                 case 'socket_status': setSocketStatus(data.payload); break; case 'status_update': setBotStatus(data.payload); break;
                 case 'daily_performance_update': setDailyPerformance(data.payload); break; case 'trade_status_update': setCurrentTrade(data.payload); break;
-                case 'debug_log': setDebugLogs(prev => [data.payload, ...prev].slice(0, 300)); break; case 'trade_log_update': setTradeHistory(data.payload); break;
+                // --- MODIFIED: Limit the debug logs to the latest 22 entries ---
+                case 'debug_log': setDebugLogs(prev => [data.payload, ...prev].slice(0, 22)); break; case 'trade_log_update': setTradeHistory(data.payload); break;
                 case 'option_chain_update': setOptionChain(data.payload); break; case 'uoa_list_update': setUoaList(data.payload); break;
                 case 'chart_data_update': setChartData(data.payload); break;
             }

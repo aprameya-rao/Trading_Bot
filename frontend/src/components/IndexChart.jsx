@@ -97,7 +97,7 @@ export default function IndexChart({ data }) {
         
         // Fit the content to the screen after the first data load
         if(data.candles && data.candles.length > 0) {
-            chartRef.current.timeScale().fitContent();
+            chartRef.current.timeScale();
         }
 
     }, [data]);
