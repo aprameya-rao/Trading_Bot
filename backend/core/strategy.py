@@ -18,65 +18,35 @@ if TYPE_CHECKING:
     from core.kite_ticker_manager import KiteTickerManager
 
 
-# --- MODIFIED: Sound functions are disabled to prevent freezing ---
-def play_sound(frequency, duration_ms):
-    """Audio alerts are disabled for stability."""
-    pass
-
-def play_entry_sound():
-    play_sound(1200, 200)
-
-def play_profit_sound():
-    play_sound(1500, 300)
-
-def play_loss_sound():
-    play_sound(300, 500)
-
-def play_warning_sound():
-    play_sound(400, 800)
+# --- Sound functions are disabled to prevent freezing ---
+def play_sound(frequency, duration_ms): pass
+def play_entry_sound(): play_sound(1200, 200)
+def play_profit_sound(): play_sound(1500, 300)
+def play_loss_sound(): play_sound(300, 500)
+def play_warning_sound(): play_sound(400, 800)
 
 
 def calculate_wma(series, length=9):
-    if length < 1 or len(series) < length:
-        return pd.Series(index=series.index, dtype=float)
+    if length < 1 or len(series) < length: return pd.Series(index=series.index, dtype=float)
     weights = np.arange(1, length + 1)
-    return series.rolling(length).apply(
-        lambda x: np.dot(x, weights) / weights.sum(), raw=True
-    )
-
+    return series.rolling(length).apply(lambda x: np.dot(x, weights) / weights.sum(), raw=True)
 
 def calculate_rsi(series, length=9):
-    if length < 1 or len(series) < length:
-        return pd.Series(index=series.index, dtype=float)
+    if length < 1 or len(series) < length: return pd.Series(index=series.index, dtype=float)
     delta = series.diff()
     gain = (delta.where(delta > 0, 0)).ewm(alpha=1 / length, adjust=False).mean()
-    loss = (
-        (-delta.where(delta < 0, 0))
-        .ewm(alpha=1 / length, adjust=False)
-        .mean()
-        .replace(0, 1e-10)
-    )
+    loss = ((-delta.where(delta < 0, 0)).ewm(alpha=1 / length, adjust=False).mean().replace(0, 1e-10))
     return 100 - (100 / (1 + (gain / loss)))
 
-
 def calculate_atr(high, low, close, length=14):
-    if length < 1 or len(close) < length:
-        return pd.Series(index=close.index, dtype=float)
-    tr = pd.concat(
-        [high - low, np.abs(high - close.shift()), np.abs(low - close.shift())], axis=1
-    ).max(axis=1)
+    if length < 1 or len(close) < length: return pd.Series(index=close.index, dtype=float)
+    tr = pd.concat([high - low, np.abs(high - close.shift()), np.abs(low - close.shift())], axis=1).max(axis=1)
     return tr.ewm(alpha=1 / length, adjust=False).mean()
 
 
 INDEX_CONFIG = {
-    "NIFTY": {
-        "name": "NIFTY", "token": 256265, "symbol": "NSE:NIFTY 50",
-        "strike_step": 50, "exchange": "NFO",
-    },
-    "SENSEX": {
-        "name": "SENSEX", "token": 265, "symbol": "BSE:SENSEX",
-        "strike_step": 100, "exchange": "BFO",
-    },
+    "NIFTY": {"name": "NIFTY", "token": 256265, "symbol": "NSE:NIFTY 50", "strike_step": 50, "exchange": "NFO"},
+    "SENSEX": {"name": "SENSEX", "token": 265, "symbol": "BSE:SENSEX", "strike_step": 100, "exchange": "BFO"},
 }
 
 
@@ -98,130 +68,102 @@ class Strategy:
             ]
             for p_key in numeric_params:
                 if p_key in self.params:
-                    if p_key == "risk_per_trade_percent" and not self.params.get(p_key):
-                        self.params[p_key] = 1.0
+                    if p_key == "risk_per_trade_percent" and not self.params.get(p_key): self.params[p_key] = 1.0
                     self.params[p_key] = float(self.params[p_key])
-        except (ValueError, TypeError) as e:
-            print(f"Warning: Could not convert a parameter to a number: {e}")
+        except (ValueError, TypeError) as e: print(f"Warning: Could not convert a parameter to a number: {e}")
 
-        # Strategy Configuration
-        self.trading_mode = self.params.get("trading_mode", "Paper Trading")
-        self.aggressiveness = self.params.get("aggressiveness", "Moderate")
-        self.index_name = self.config["name"]
-        self.index_token = self.config["token"]
-        self.index_symbol = self.config["symbol"]
-        self.strike_step = self.config["strike_step"]
-        self.exchange = self.config["exchange"]
-
-        # State Variables
-        self.position = None
-        self.daily_pnl, self.daily_profit, self.daily_loss = 0, 0, 0
-        self.daily_trade_limit_hit = False
-        self.trades_this_minute = 0
-        self.trend_state = None
-        self.pending_steep_signal = None
-        self.last_trade_minute = None
-        self.initial_subscription_done = False
-        self.current_minute, self.current_candle = None, {}
-        self.option_candles, self.prices, self.price_history = {}, {}, {}
+        self.trading_mode = self.params.get("trading_mode", "Paper Trading"); self.aggressiveness = self.params.get("aggressiveness", "Moderate")
+        self.index_name, self.index_token, self.index_symbol, self.strike_step, self.exchange = self.config["name"], self.config["token"], self.config["symbol"], self.config["strike_step"], self.config["exchange"]
+        self.position, self.daily_pnl, self.daily_profit, self.daily_loss, self.daily_trade_limit_hit, self.trades_this_minute, self.trend_state, self.pending_steep_signal, self.last_trade_minute, self.initial_subscription_done, self.current_minute, self.current_candle, self.option_candles, self.prices, self.price_history = None, 0, 0, 0, False, 0, None, None, None, False, None, {}, {}, {}, {}
         self.token_to_symbol = {self.index_token: self.index_symbol}
-        self.uoa_watchlist, self.trade_log = {}, []
-        self.performance_stats = {"total_trades": 0, "winning_trades": 0, "losing_trades": 0}
+        self.uoa_watchlist, self.trade_log, self.performance_stats = {}, [], {"total_trades": 0, "winning_trades": 0, "losing_trades": 0}
         self.data_df = pd.DataFrame(columns=["open", "high", "low", "close", "sma", "wma", "rsi", "rsi_sma", "atr"])
         self.last_check_log_time, self.last_exit_log_time = None, None
         self.next_partial_profit_level = 1
 
-        # Load Instruments and Strategy Parameters
-        self.option_instruments = self.load_instruments()
-        self.last_used_expiry = self.get_weekly_expiry()
+        self.option_instruments = self.load_instruments(); self.last_used_expiry = self.get_weekly_expiry()
         try:
-            with open("strategy_params.json", "r") as f:
-                self.STRATEGY_PARAMS = json.load(f)
+            with open("strategy_params.json", "r") as f: self.STRATEGY_PARAMS = json.load(f)
         except FileNotFoundError:
             self.STRATEGY_PARAMS = {"wma_period": 9, "sma_period": 9, "rsi_period": 9, "rsi_signal_period": 3, "rsi_angle_lookback": 2, "rsi_angle_threshold": 15.0, "atr_period": 14, "min_atr_value": 4, "ma_gap_threshold_pct": 0.05}
 
     async def run(self):
         await self._log_debug("System", "Strategy instance created.")
-        if not self.is_backtest:
-            await self.bootstrap_data()
-        if not self.ui_update_task or self.ui_update_task.done():
-            self.ui_update_task = asyncio.create_task(self.periodic_ui_updater())
+        if not self.is_backtest: await self.bootstrap_data()
+        if not self.ui_update_task or self.ui_update_task.done(): self.ui_update_task = asyncio.create_task(self.periodic_ui_updater())
 
     async def periodic_ui_updater(self):
         while True:
             try:
-                if self.is_backtest:
-                    await asyncio.sleep(1); continue
+                if self.is_backtest: await asyncio.sleep(1); continue
                 if self.ticker_manager and self.ticker_manager.is_connected:
                     await self._update_ui_status()
                     await self._update_ui_option_chain()
                     await self._update_ui_chart_data()
                 await asyncio.sleep(1)
-            except asyncio.CancelledError:
-                await self._log_debug("UI Updater", "Task cancelled."); break
-            except Exception as e:
-                await self._log_debug("UI Updater Error", f"An error occurred: {e}"); await asyncio.sleep(5)
+            except asyncio.CancelledError: await self._log_debug("UI Updater", "Task cancelled."); break
+            except Exception as e: await self._log_debug("UI Updater Error", f"An error occurred: {e}"); await asyncio.sleep(5)
 
-    async def _log_debug(self, source, message):
-        payload = {"time": datetime.now().strftime("%H:%M:%S"), "source": source, "message": message}
-        await self.manager.broadcast({"type": "debug_log", "payload": payload})
-
-    async def _update_ui_status(self):
-        payload = {"connection": "CONNECTED" if self.ticker_manager and self.ticker_manager.is_connected else "DISCONNECTED", "mode": self.trading_mode.upper(), "indexPrice": self.prices.get(self.index_symbol, 0), "trend": self.trend_state or "---", "indexName": self.index_name}
-        await self.manager.broadcast({"type": "status_update", "payload": payload})
-
-    async def _update_ui_performance(self):
-        payload = {"netPnl": self.daily_pnl, "grossProfit": self.daily_profit, "grossLoss": self.daily_loss, "wins": self.performance_stats["winning_trades"], "losses": self.performance_stats["losing_trades"]}
-        await self.manager.broadcast({"type": "daily_performance_update", "payload": payload})
-
+    async def _log_debug(self, source, message): payload = {"time": datetime.now().strftime("%H:%M:%S"), "source": source, "message": message}; await self.manager.broadcast({"type": "debug_log", "payload": payload})
+    async def _update_ui_status(self): payload = {"connection": "CONNECTED" if self.ticker_manager and self.ticker_manager.is_connected else "DISCONNECTED", "mode": self.trading_mode.upper(), "indexPrice": self.prices.get(self.index_symbol, 0), "trend": self.trend_state or "---", "indexName": self.index_name}; await self.manager.broadcast({"type": "status_update", "payload": payload})
+    async def _update_ui_performance(self): payload = {"netPnl": self.daily_pnl, "grossProfit": self.daily_profit, "grossLoss": self.daily_loss, "wins": self.performance_stats["winning_trades"], "losses": self.performance_stats["losing_trades"]}; await self.manager.broadcast({"type": "daily_performance_update", "payload": payload})
     async def _update_ui_trade_status(self):
         payload = None
-        if self.position:
-            p, ltp = self.position, self.prices.get(self.position["symbol"], self.position["entry_price"])
-            pnl = (ltp - p["entry_price"]) * p["qty"]
-            profit_pct = (((ltp - p["entry_price"]) / p["entry_price"]) * 100 if p["entry_price"] > 0 else 0)
-            payload = {"symbol": p["symbol"], "entry_price": p["entry_price"], "pnl": pnl, "profit_pct": profit_pct, "trail_sl": p["trail_sl"], "max_price": p["max_price"]}
+        if self.position: p, ltp = self.position, self.prices.get(self.position["symbol"], self.position["entry_price"]); pnl = (ltp - p["entry_price"]) * p["qty"]; profit_pct = (((ltp - p["entry_price"]) / p["entry_price"]) * 100 if p["entry_price"] > 0 else 0); payload = {"symbol": p["symbol"], "entry_price": p["entry_price"], "pnl": pnl, "profit_pct": profit_pct, "trail_sl": p["trail_sl"], "max_price": p["max_price"]}
         await self.manager.broadcast({"type": "trade_status_update", "payload": payload})
-
-    async def _update_ui_trade_log(self):
-        await self.manager.broadcast({"type": "trade_log_update", "payload": self.trade_log})
-
-    async def _update_ui_uoa_list(self):
-        await self.manager.broadcast({"type": "uoa_list_update", "payload": list(self.uoa_watchlist.values())})
-
+    async def _update_ui_trade_log(self): await self.manager.broadcast({"type": "trade_log_update", "payload": self.trade_log})
+    async def _update_ui_uoa_list(self): await self.manager.broadcast({"type": "uoa_list_update", "payload": list(self.uoa_watchlist.values())})
     async def _update_ui_option_chain(self):
-        pairs = self.get_strike_pairs()
-        data = []
+        pairs = self.get_strike_pairs(); data = []
         if self.prices.get(self.index_symbol) and pairs:
             for p in pairs:
                 ce_symbol, pe_symbol = (p["ce"]["tradingsymbol"] if p["ce"] else None, p["pe"]["tradingsymbol"] if p["pe"] else None)
                 data.append({"strike": p["strike"], "ce_ltp": self.prices.get(ce_symbol, "--") if ce_symbol else "--", "pe_ltp": self.prices.get(pe_symbol, "--") if pe_symbol else "--"})
         await self.manager.broadcast({"type": "option_chain_update", "payload": data})
-
+        
     async def _update_ui_chart_data(self):
         temp_df = self.data_df.copy()
+
+    # Combine historical and live candle data
         if self.current_candle.get("minute"):
             live_candle_df = pd.DataFrame([self.current_candle], index=[self.current_candle["minute"]])
-            if not temp_df.empty:
-                temp_df = pd.concat([temp_df, live_candle_df])
-            else:
-                temp_df = live_candle_df
+            temp_df = pd.concat([temp_df, live_candle_df])
+
+    # --- FINAL FIX: Explicitly remove any duplicate timestamps, keeping the last entry ---
+    # This is the most robust way to solve the "data must be asc ordered by time" error.
+        if not temp_df.index.is_unique:
+            temp_df = temp_df[~temp_df.index.duplicated(keep='last')]
+
+    # The original sort check can remain as a final safety measure.
+        if not temp_df.index.is_monotonic_increasing: temp_df.sort_index(inplace=True)
+    
         chart_data = {"candles": [], "wma": [], "sma": [], "rsi": [], "rsi_sma": []}
         if not temp_df.empty:
             for index, row in temp_df.iterrows():
                 timestamp = int(index.timestamp())
                 chart_data["candles"].append({"time": timestamp, "open": row.get("open", 0), "high": row.get("high", 0), "low": row.get("low", 0), "close": row.get("close", 0)})
-                if pd.notna(row.get("wma")): chart_data["wma"].append({"time": timestamp, "value": row["wma"]})
-                if pd.notna(row.get("sma")): chart_data["sma"].append({"time": timestamp, "value": row["sma"]})
-                if pd.notna(row.get("rsi")): chart_data["rsi"].append({"time": timestamp, "value": row["rsi"]})
-                if pd.notna(row.get("rsi_sma")): chart_data["rsi_sma"].append({"time": timestamp, "value": row["rsi_sma"]})
-        await self.manager.broadcast({"type": "chart_data_update", "payload": chart_data})
+            
+            # Only append indicator data if the value is a valid number
+                wma_val = row.get("wma")
+                sma_val = row.get("sma")
+                rsi_val = row.get("rsi")
+                rsi_sma_val = row.get("rsi_sma")
+            
+                if pd.notna(wma_val):
+                    chart_data["wma"].append({"time": timestamp, "value": wma_val})
+                if pd.notna(sma_val):
+                    chart_data["sma"].append({"time": timestamp, "value": sma_val})
+                if pd.notna(rsi_val):
+                    chart_data["rsi"].append({"time": timestamp, "value": rsi_val})
+                if pd.notna(rsi_sma_val):
+                    chart_data["rsi_sma"].append({"time": timestamp, "value": rsi_sma_val})
 
+        await self.manager.broadcast({"type": "chart_data_update", "payload": chart_data})
+    
     async def on_ticker_connect(self):
         await self._log_debug("WebSocket", f"Connected. Subscribing to index: {self.index_symbol}")
         await self._update_ui_status()
-        if self.ticker_manager:
-            self.ticker_manager.resubscribe([self.index_token])
+        if self.ticker_manager: self.ticker_manager.resubscribe([self.index_token])
 
     async def on_ticker_disconnect(self):
         await self._update_ui_status()
@@ -237,15 +179,10 @@ class Strategy:
                 try:
                     token, ltp = tick.get("instrument_token"), tick.get("last_price")
                     if token is not None and ltp is not None and (symbol := self.token_to_symbol.get(token)):
-                        self.prices[symbol] = ltp
-                        self.update_price_history(symbol, ltp)
-                        await self.update_candle_and_indicators(ltp, symbol)
-                        if self.position and self.position["symbol"] == symbol:
-                            await self.evaluate_exit_logic()
-                except Exception as e:
-                    await self._log_debug("Tick Error", f"Error processing tick {tick.get('instrument_token')}: {e}")
-        except Exception as e:
-            await self._log_debug("Tick Handler Error", f"Critical error in handle_ticks_async: {e}")
+                        self.prices[symbol] = ltp; self.update_price_history(symbol, ltp); await self.update_candle_and_indicators(ltp, symbol)
+                        if self.position and self.position["symbol"] == symbol: await self.evaluate_exit_logic()
+                except Exception as e: await self._log_debug("Tick Error", f"Error processing tick {tick.get('instrument_token')}: {e}")
+        except Exception as e: await self._log_debug("Tick Handler Error", f"Critical error in handle_ticks_async: {e}")
 
     async def bootstrap_data(self, df: Optional[pd.DataFrame] = None):
         if df is not None:
@@ -258,12 +195,9 @@ class Strategy:
                 if data:
                     df = pd.DataFrame(data).tail(300); df.index = pd.to_datetime(df["date"])
                     self.data_df = self._calculate_indicators(df); await self._update_trend_state(); await self._log_debug("Bootstrap", f"Success! Historical data loaded with {len(self.data_df)} candles."); return
-                else:
-                    await self._log_debug("Bootstrap", f"Attempt {attempt}/3 failed: No data returned from API.")
-            except Exception as e:
-                await self._log_debug("Bootstrap", f"Attempt {attempt}/3 failed: {e}")
-            if attempt < 3:
-                await asyncio.sleep(3)
+                else: await self._log_debug("Bootstrap", f"Attempt {attempt}/3 failed: No data returned from API.")
+            except Exception as e: await self._log_debug("Bootstrap", f"Attempt {attempt}/3 failed: {e}")
+            if attempt < 3: await asyncio.sleep(3)
         await self._log_debug("Bootstrap", "CRITICAL: Could not bootstrap historical data after 3 attempts.")
 
     async def _update_trend_state(self):
@@ -271,8 +205,7 @@ class Strategy:
         last = self.data_df.iloc[-1]
         if pd.isna(last["wma"]) or pd.isna(last["sma"]): return
         current_state = "BULLISH" if last["wma"] > last["sma"] else "BEARISH"
-        if self.trend_state != current_state:
-            self.trend_state = current_state; await self._log_debug("Trend", f"Trend is now {self.trend_state}.")
+        if self.trend_state != current_state: self.trend_state = current_state; await self._log_debug("Trend", f"Trend is now {self.trend_state}.")
 
     async def update_candle_and_indicators(self, ltp, symbol=None):
         self.current_minute = datetime.now(timezone.utc).replace(second=0, microsecond=0)
@@ -287,8 +220,7 @@ class Strategy:
                 if self.pending_steep_signal: await self.check_pending_steep_signal()
                 await self.check_trade_entry()
             candle_dict.update({"minute": self.current_minute, "open": ltp, "high": ltp, "low": ltp, "close": ltp})
-        else:
-            candle_dict.update({"high": max(candle_dict.get("high", ltp), ltp), "low": min(candle_dict.get("low", ltp), ltp), "close": ltp})
+        else: candle_dict.update({"high": max(candle_dict.get("high", ltp), ltp), "low": min(candle_dict.get("low", ltp), ltp), "close": ltp})
 
     async def log_trade_decision(self, trade_info):
         if self.is_backtest: return
@@ -303,8 +235,7 @@ class Strategy:
     async def check_trade_entry(self):
         now = datetime.now()
         log_this_time = self.last_check_log_time is None or (now - self.last_check_log_time) > timedelta(seconds=10)
-        if log_this_time:
-            self.last_check_log_time = now; await self._log_debug("Check.Entry", "--- Running Entry Checks ---")
+        if log_this_time: self.last_check_log_time = now; await self._log_debug("Check.Entry", "--- Running Entry Checks ---")
         if self.position:
             if log_this_time: await self._log_debug("Check.Entry", "-> FAIL: A position is already open."); return
         daily_sl, daily_pt = self.params.get("daily_sl", 0), self.params.get("daily_pt", 0)
@@ -386,7 +317,7 @@ class Strategy:
         qty_to_exit = math.ceil(p["qty"] * (partial_exit_pct / 100))
         qty_to_exit = int(min(qty_to_exit, p["qty"]))
         if qty_to_exit < 1: return
-        if (p["qty"] - qty_to_exit) == 0: await self.exit_position(f"Final Partial Profit-Take"); return
+        if (p["qty"] - qty_to_exit) <= 0: await self.exit_position(f"Final Partial Profit-Take"); return
 
         exit_price = self.prices.get(p["symbol"], p["entry_price"])
         if self.trading_mode == "Live Trading" and not self.is_backtest:
@@ -566,13 +497,14 @@ class Strategy:
                 opt = self.get_entry_option('CE')
                 if opt and self.is_price_rising(self.index_symbol) and self.is_price_rising(opt['tradingsymbol']): await self.take_trade('RSI_Immediate_CE', opt); return True
 
+            # --- FIX: Compare RSI to its own SMA (rsi_sma) instead of the price's SMA ---
             if last['rsi'] < last['rsi_sma'] and prev['rsi'] >= prev['rsi_sma']:
                 if log: await self._log_debug("Check.RSI", f"-> PASS: Bearish RSI crossover detected.")
                 if angle >= -angle_thresh:
                     if log: await self._log_debug("Check.RSI", f"-> FAIL: Angle ({angle:.2f}) not steep enough ( < -{angle_thresh:.2f})."); return False
                 if log: await self._log_debug("Check.RSI", f"-> PASS: Angle ({angle:.2f}) is steep enough.")
                 opt = self.get_entry_option('PE')
-                if opt and not self.is_price_rising(self.index_symbol) and self.is_price_rising(opt['tradingsymbol']): await self.take_trade('RSI_Immediate_PE', opt); return True
+                if opt and self.is_price_rising(self.index_symbol) and self.is_price_rising(opt['tradingsymbol']): await self.take_trade('RSI_Immediate_PE', opt); return True
             
             return False
         except Exception as e: await self._log_debug("CrashGuard", f"Error in RSI immediate check: {e}"); return False
