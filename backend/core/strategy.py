@@ -19,11 +19,14 @@ if TYPE_CHECKING:
 
 
 # --- Sound functions are disabled to prevent freezing ---
-def play_sound(frequency, duration_ms): pass
-def play_entry_sound(): play_sound(1200, 200)
-def play_profit_sound(): play_sound(1500, 300)
-def play_loss_sound(): play_sound(300, 500)
-def play_warning_sound(): play_sound(400, 800)
+async def _play_sound_on_frontend(manager, sound_name: str):
+    """Sends a WebSocket message to the frontend to play a sound."""
+    await manager.broadcast({"type": "play_sound", "payload": sound_name})
+
+async def _play_entry_sound(manager): await _play_sound_on_frontend(manager, "entry")
+async def _play_profit_sound(manager): await _play_sound_on_frontend(manager, "profit")
+async def _play_loss_sound(manager): await _play_sound_on_frontend(manager, "loss")
+async def _play_warning_sound(manager): await _play_sound_on_frontend(manager, "warning")
 
 
 def calculate_wma(series, length=9):
@@ -128,24 +131,44 @@ class Strategy:
                 data.append({"strike": p["strike"], "ce_ltp": self.prices.get(ce_symbol, "--") if ce_symbol else "--", "pe_ltp": self.prices.get(pe_symbol, "--") if pe_symbol else "--"})
         await self.manager.broadcast({"type": "option_chain_update", "payload": data})
         
+    # --- MODIFIED: Added logic to prevent duplicate timestamps ---
     async def _update_ui_chart_data(self):
         temp_df = self.data_df.copy()
+
+        # Combine historical and live candle data
         if self.current_candle.get("minute"):
             live_candle_df = pd.DataFrame([self.current_candle], index=[self.current_candle["minute"]])
             temp_df = pd.concat([temp_df, live_candle_df])
+
+        # --- FIX: Explicitly remove any duplicate timestamps, keeping the last entry ---
+        # This is the most robust way to solve the "data must be asc ordered by time" error.
         if not temp_df.index.is_unique:
             temp_df = temp_df[~temp_df.index.duplicated(keep='last')]
-        if not temp_df.index.is_monotonic_increasing: temp_df.sort_index(inplace=True)
+
+        # The original sort check can remain as a final safety measure.
+        if not temp_df.index.is_monotonic_increasing:
+            temp_df.sort_index(inplace=True)
+    
         chart_data = {"candles": [], "wma": [], "sma": [], "rsi": [], "rsi_sma": []}
         if not temp_df.empty:
             for index, row in temp_df.iterrows():
                 timestamp = int(index.timestamp())
                 chart_data["candles"].append({"time": timestamp, "open": row.get("open", 0), "high": row.get("high", 0), "low": row.get("low", 0), "close": row.get("close", 0)})
-                wma_val = row.get("wma"); sma_val = row.get("sma"); rsi_val = row.get("rsi"); rsi_sma_val = row.get("rsi_sma")
-                if pd.notna(wma_val): chart_data["wma"].append({"time": timestamp, "value": wma_val})
-                if pd.notna(sma_val): chart_data["sma"].append({"time": timestamp, "value": sma_val})
-                if pd.notna(rsi_val): chart_data["rsi"].append({"time": timestamp, "value": rsi_val})
-                if pd.notna(rsi_sma_val): chart_data["rsi_sma"].append({"time": timestamp, "value": rsi_sma_val})
+            
+                wma_val = row.get("wma")
+                sma_val = row.get("sma")
+                rsi_val = row.get("rsi")
+                rsi_sma_val = row.get("rsi_sma")
+            
+                if pd.notna(wma_val):
+                    chart_data["wma"].append({"time": timestamp, "value": wma_val})
+                if pd.notna(sma_val):
+                    chart_data["sma"].append({"time": timestamp, "value": sma_val})
+                if pd.notna(rsi_val):
+                    chart_data["rsi"].append({"time": timestamp, "value": rsi_val})
+                if pd.notna(rsi_sma_val):
+                    chart_data["rsi_sma"].append({"time": timestamp, "value": rsi_sma_val})
+
         await self.manager.broadcast({"type": "chart_data_update", "payload": chart_data})
     
     async def on_ticker_connect(self):
@@ -256,9 +279,9 @@ class Strategy:
         if self.daily_trade_limit_hit:
             if log_this_time: await self._log_debug("Check.Entry", "-> FAIL: Daily trade limit (SL/PT) has been hit."); return
         if daily_sl < 0 and self.daily_pnl <= daily_sl:
-            self.daily_trade_limit_hit = True; play_warning_sound(); await self._log_debug("RISK", f"Daily Stop-Loss of {daily_sl} hit. Disabling trading."); return
+            self.daily_trade_limit_hit = True; await _play_warning_sound(self.manager); await self._log_debug("RISK", f"Daily Stop-Loss of {daily_sl} hit. Disabling trading."); return
         if daily_pt > 0 and self.daily_pnl >= daily_pt:
-            self.daily_trade_limit_hit = True; play_profit_sound(); await self._log_debug("RISK", f"Daily Profit Target of {daily_pt} hit. Disabling trading."); return
+            self.daily_trade_limit_hit = True; await _play_profit_sound(self.manager); await self._log_debug("RISK", f"Daily Profit Target of {daily_pt} hit. Disabling trading."); return
         if self.trades_this_minute >= 2:
             if log_this_time: await self._log_debug("Check.Entry", f"-> FAIL: Trade frequency limit for this minute ({self.trades_this_minute}/2) reached."); return
         if self.data_df.empty or len(self.data_df) < 20:
@@ -292,10 +315,10 @@ class Strategy:
                 def place_order_sync(): return kite.place_order(tradingsymbol=symbol, exchange=self.exchange, transaction_type=kite.TRANSACTION_TYPE_BUY, quantity=qty, variety=kite.VARIETY_REGULAR, order_type=kite.ORDER_TYPE_MARKET, product=kite.PRODUCT_MIS)
                 order_id = await asyncio.to_thread(place_order_sync)
                 await self._log_debug("LIVE TRADE", f"Placed BUY order for {qty} {symbol}. Order ID: {order_id}")
-            except Exception as e: await self._log_debug("LIVE TRADE ERROR", f"Order placement failed: {e}"); play_loss_sound(); return
+            except Exception as e: await self._log_debug("LIVE TRADE ERROR", f"Order placement failed: {e}"); await _play_loss_sound(self.manager); return
         else: await self._log_debug("PAPER TRADE", f"Simulating BUY order for {qty} {symbol}.")
         self.position = {"symbol": symbol, "entry_price": price, "direction": side, "qty": qty, "trail_sl": round(initial_sl_price, 1), "max_price": price, "trigger_reason": trigger, "entry_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "lot_size": lot_size}
-        self.trades_this_minute += 1; self.performance_stats["total_trades"] += 1; play_entry_sound()
+        self.trades_this_minute += 1; self.performance_stats["total_trades"] += 1; await _play_entry_sound(self.manager)
         await self._update_ui_trade_status()
         await self._log_debug("Trade", f"Position taken: {symbol} @ {price} Qty: {qty} Trigger: {trigger}")
 
@@ -339,12 +362,12 @@ class Strategy:
                 def place_order_sync(): return kite.place_order(tradingsymbol=p["symbol"], exchange=self.exchange, transaction_type=kite.TRANSACTION_TYPE_SELL, quantity=qty_to_exit, variety=kite.VARIETY_REGULAR, order_type=kite.ORDER_TYPE_MARKET, product=kite.PRODUCT_MIS)
                 await asyncio.to_thread(place_order_sync)
                 await self._log_debug("LIVE TRADE", f"Partially exited {qty_to_exit} of {p['symbol']}.")
-            except Exception as e: await self._log_debug("LIVE TRADE ERROR", f"Partial exit failed: {e}"); play_loss_sound(); return
+            except Exception as e: await self._log_debug("LIVE TRADE ERROR", f"Partial exit failed: {e}"); await _play_loss_sound(self.manager); return
         else: await self._log_debug("PAPER TRADE", f"Simulating partial exit of {qty_to_exit} of {p['symbol']}.")
         
         net_pnl = (exit_price - p["entry_price"]) * qty_to_exit
         self.daily_pnl += net_pnl
-        if net_pnl > 0: self.daily_profit += net_pnl; play_profit_sound()
+        if net_pnl > 0: self.daily_profit += net_pnl; await _play_profit_sound(self.manager)
         
         reason = f"Partial Profit-Take ({self.next_partial_profit_level})"
         trade_entry = (p["symbol"], qty_to_exit, datetime.now().strftime('%Y-%m-%d %H:%M:%S'), p["trigger_reason"], f"{p['entry_price']:.2f}", f"{exit_price:.2f}", f"{net_pnl:.2f}", reason)
@@ -365,11 +388,11 @@ class Strategy:
                 def place_order_sync(): return kite.place_order(tradingsymbol=p["symbol"], exchange=self.exchange, transaction_type=kite.TRANSACTION_TYPE_SELL, quantity=p["qty"], variety=kite.VARIETY_REGULAR, order_type=kite.ORDER_TYPE_MARKET, product=kite.PRODUCT_MIS)
                 order_id = await asyncio.to_thread(place_order_sync)
                 await self._log_debug("LIVE TRADE", f"Placed SELL order for {p['qty']} {p['symbol']}. Order ID: {order_id}")
-            except Exception as e: await self._log_debug("LIVE TRADE ERROR", f"Exit order placement failed: {e}"); play_loss_sound()
+            except Exception as e: await self._log_debug("LIVE TRADE ERROR", f"Exit order placement failed: {e}"); await _play_loss_sound(self.manager)
         else: await self._log_debug("PAPER TRADE", f"Simulating SELL order for {p['qty']} {p['symbol']}.")
         net_pnl = (exit_price - p["entry_price"]) * p["qty"]; self.daily_pnl += net_pnl
-        if net_pnl > 0: self.performance_stats["winning_trades"] += 1; self.daily_profit += net_pnl; play_profit_sound()
-        else: self.performance_stats["losing_trades"] += 1; self.daily_loss += net_pnl; play_loss_sound()
+        if net_pnl > 0: self.performance_stats["winning_trades"] += 1; self.daily_profit += net_pnl; await _play_profit_sound(self.manager)
+        else: self.performance_stats["losing_trades"] += 1; self.daily_loss += net_pnl; await _play_loss_sound(self.manager)
         trade_entry = (p["symbol"], p["qty"], p["entry_time"], p["trigger_reason"], f"{p['entry_price']:.2f}", f"{exit_price:.2f}", f"{net_pnl:.2f}", reason)
         self.trade_log.append(trade_entry)
         log_info = {"timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "trigger_reason": p["trigger_reason"], "symbol": p["symbol"], "quantity": p["qty"], "pnl": round(net_pnl, 2), "entry_price": p["entry_price"], "exit_price": exit_price, "exit_reason": reason, "trend_state": self.trend_state}
@@ -584,7 +607,7 @@ class Strategy:
             token = opt.get('instrument_token', opt.get('tradingsymbol'))
             if token in self.uoa_watchlist: return False
             self.uoa_watchlist[token] = {'symbol': opt['tradingsymbol'], 'type': side, 'strike': strike}
-            await self._log_debug("UOA", f"Added {opt['tradingsymbol']} to watchlist."); await self._update_ui_uoa_list(); play_entry_sound()
+            await self._log_debug("UOA", f"Added {opt['tradingsymbol']} to watchlist."); await self._update_ui_uoa_list(); await _play_entry_sound(self.manager)
             if self.ticker_manager and not self.is_backtest:
                 tokens = self.get_all_option_tokens()
                 await self.map_option_tokens(tokens)

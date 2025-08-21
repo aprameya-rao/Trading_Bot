@@ -147,7 +147,7 @@ async def get_trade_history():
 async def get_all_trade_history():
     """Fetches all trade history from the beginning of time."""
     try:
-        conn = sqlite3.connect('trading_data_all.db')
+        conn = sqlite3.connect('trading_data_today.db')
         df = pd.read_sql_query("SELECT * FROM trades ORDER BY timestamp ASC", conn)
         conn.close()
         return df.to_dict('records')
