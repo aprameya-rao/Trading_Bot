@@ -68,7 +68,7 @@ export default function IndexChart({ data }) {
         // Create a separate pane for the RSI
         chart.priceScale('rsi').applyOptions({
             scaleMargins: { top: 0.8, bottom: 0 },
-            height: 80
+            height: 225
         });
 
         // This is the crucial cleanup function. It will be called when the component unmounts.

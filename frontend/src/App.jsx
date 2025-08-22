@@ -1,4 +1,7 @@
-import React, { useState, useEffect, useCallback } from 'react';
+// frontend/src/App.jsx
+
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { Howl } from 'howler';
 import { Grid, ThemeProvider, createTheme, CssBaseline, Box } from '@mui/material';
 import { useSnackbar } from 'notistack';
 import StatusPanel from './components/StatusPanel';
@@ -10,11 +13,9 @@ import IndexChart from './components/IndexChart';
 import OptionChain from './components/OptionChain';
 import LogTabs from './components/LogTabs';
 import UOAPanel from './components/UOAPanel';
-import { connectWebSocket, disconnectWebSocket } from './services/socket';
-import { Howl } from 'howler';
+import { createSocketConnection } from './services/socket';
 
 const MOCK_MODE = false;
-
 
 const sounds = {
   entry: new Howl({ src: ['/sound/entry.mp3'], volume: 0.7 }),
@@ -22,7 +23,6 @@ const sounds = {
   loss: new Howl({ src: ['/sound/loss.mp3'], volume: 0.7 }),
   warning: new Howl({ src: ['/sound/warning.mp3'], volume: 1.0 }),
 };
-
 
 const lightTheme = createTheme({
     palette: {
@@ -32,6 +32,9 @@ const lightTheme = createTheme({
 
 function App() {
     const { enqueueSnackbar } = useSnackbar();
+    const socketRef = useRef(null);
+
+    // All application state
     const [chartData, setChartData] = useState(null);
     const [botStatus, setBotStatus] = useState({ connection: 'DISCONNECTED', mode: 'NOT STARTED', indexPrice: 0, trend: '---', indexName: 'INDEX' });
     const [dailyPerformance, setDailyPerformance] = useState({ netPnl: 0, grossProfit: 0, grossLoss: 0, wins: 0, losses: 0 });
@@ -41,59 +44,58 @@ function App() {
     const [optionChain, setOptionChain] = useState([]);
     const [uoaList, setUoaList] = useState([]);
     const [socketStatus, setSocketStatus] = useState('DISCONNECTED');
+
+    const sendSocketMessage = useCallback((message) => {
+        if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+            socketRef.current.send(JSON.stringify(message));
+        } else {
+            console.error("Cannot send message, WebSocket is not open.");
+        }
+    }, []);
     
     useEffect(() => {
-        if (MOCK_MODE) {
-            setSocketStatus('CONNECTED'); setBotStatus(mockBotStatus); setDailyPerformance(mockDailyPerformance);
-            setCurrentTrade(mockCurrentTrade); setDebugLogs(mockDebugLogs); setTradeHistory(mockTradeHistory);
-            setOptionChain(mockOptionChain); setUoaList(mockUoaList); setChartData(mockChartData);
-            return;
-        }
-        const handleSocketMessage = (data) => {
-            switch (data.type) {
-                case 'socket_status': setSocketStatus(data.payload); break; case 'status_update': setBotStatus(data.payload); break;
-                case 'daily_performance_update': setDailyPerformance(data.payload); break; case 'trade_status_update': setCurrentTrade(data.payload); break;
-                // --- MODIFIED: Limit the debug logs to the latest 22 entries ---
-                case 'debug_log': setDebugLogs(prev => [data.payload, ...prev].slice(0, 22)); break; case 'trade_log_update': setTradeHistory(data.payload); break;
-                case 'option_chain_update': setOptionChain(data.payload); break; case 'uoa_list_update': setUoaList(data.payload); break;
-                case 'chart_data_update': setChartData(data.payload); break;
+        if (MOCK_MODE) { return; }
+
+        const handleMessage = (event) => {
+            try {
+                const data = JSON.parse(event.data);
+                // The main dispatcher for all incoming messages
+                switch (data.type) {
+                    case 'status_update': setBotStatus(data.payload); break;
+                    case 'daily_performance_update': setDailyPerformance(data.payload); break;
+                    case 'trade_status_update': setCurrentTrade(data.payload); break;
+                    case 'debug_log': setDebugLogs(prev => [data.payload, ...prev].slice(0, 22)); break;
+                    case 'trade_log_update': setTradeHistory(data.payload); break;
+                    case 'option_chain_update': setOptionChain(data.payload); break;
+                    case 'uoa_list_update': setUoaList(data.payload); break;
+                    case 'chart_data_update': setChartData(data.payload); break;
+                    case 'play_sound':
+                        if (sounds[data.payload]) {
+                            sounds[data.payload].play();
+                        }
+                        break;
+                }
+            } catch (error) {
+                console.error("Failed to parse socket message:", event.data, error);
             }
         };
-        connectWebSocket(handleSocketMessage); return () => disconnectWebSocket();
-    }, []);
 
-    useEffect(() => {
-        // ...
-        const handleSocketMessage = (data) => {
-            switch (data.type) {
-                case 'socket_status': setSocketStatus(data.payload); break;
-                // ... other cases
-                case 'chart_data_update': setChartData(data.payload); break;
-                
-                // --- ADD THIS NEW CASE ---
-                case 'play_sound':
-    // We added the keyword "Sound:" to the log
-    console.log(`--- Sound: Received event, trying to play: ${data.payload} ---`);
+        // Create the connection and store it in the ref
+        socketRef.current = createSocketConnection(
+            () => setSocketStatus('CONNECTED'),
+            handleMessage,
+            () => setSocketStatus('DISCONNECTED'),
+            (error) => console.error('Socket error:', error)
+        );
 
-    if (sounds[data.payload]) {
-        const sound = sounds[data.payload];
-
-        // Add a specific error listener for this sound
-        sound.once('playerror', function(id, error) {
-          console.error(`--- Sound: Howler Playback Error ---`, error);
-        });
-
-        sound.play();
-
-    } else {
-        console.warn(`--- Sound: Howler sound not found for payload: ${data.payload} ---`);
-    }
-    break;
-    }
+        // This is the crucial cleanup function
+        return () => {
+            if (socketRef.current) {
+                console.log("Cleaning up WebSocket connection.");
+                socketRef.current.close();
+            }
         };
-        connectWebSocket(handleSocketMessage);
-        return () => disconnectWebSocket();
-    }, []);
+    }, []); // Empty array ensures this runs only on mount and unmount
 
     const handleManualExit = async () => {
         if (window.confirm('Are you sure you want to manually exit the current trade?')) {
@@ -114,31 +116,23 @@ function App() {
             <CssBaseline />
             <Box sx={{ p: 2 }}>
                 <Grid container spacing={2}>
-                    {/* Left Pane */}
                     <Grid item xs={12} md={4} container direction="column" spacing={2} wrap="nowrap">
                         <Grid item><StatusPanel status={botStatus} socketStatus={socketStatus} /></Grid>
                         <Grid item><CurrentTradePanel trade={currentTrade} onManualExit={handleManualExit} /></Grid>
                         <Grid item><ParametersPanel isMock={MOCK_MODE} /></Grid>
                         <Grid item><IntelligencePanel /></Grid>
                         <Grid item><PerformancePanel data={dailyPerformance} /></Grid>
-                        <Grid item><UOAPanel list={uoaList} /></Grid>
+                        <Grid item><UOAPanel list={uoaList} sendSocketMessage={sendSocketMessage} /></Grid>
                     </Grid>
-
-                    {/* Right Pane */}
                     <Grid item xs={12} md={8} sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                        <Box>
-                            <IndexChart data={chartData} />
-                        </Box>
-                        <Box>
-                            <OptionChain data={optionChain} indexPrice={botStatus.indexPrice} />
-                        </Box>
-                        <Box sx={{ flexGrow: 1, minHeight: 0 }}>
-                            <LogTabs debugLogs={debugLogs} tradeHistory={tradeHistory} />
-                        </Box>
+                        <Box><IndexChart data={chartData} /></Box>
+                        <Box><OptionChain data={optionChain} indexPrice={botStatus.indexPrice} /></Box>
+                        <Box sx={{ flexGrow: 1, minHeight: 0 }}><LogTabs debugLogs={debugLogs} tradeHistory={tradeHistory} /></Box>
                     </Grid>
                 </Grid>
             </Box>
         </ThemeProvider>
     );
 }
+
 export default App;

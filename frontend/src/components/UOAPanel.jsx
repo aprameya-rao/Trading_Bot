@@ -1,9 +1,9 @@
 import React, { useState } from 'react';
 import { Paper, Typography, Box, TextField, Button, TableContainer, Table, TableHead, TableRow, TableCell, TableBody } from '@mui/material';
 import { useSnackbar } from 'notistack';
-import { sendWebSocketMessage } from '../services/socket';
 
-export default function UOAPanel({ list }) {
+// The 'sendWebSocketMessage' function is now passed in as a prop
+export default function UOAPanel({ list, sendSocketMessage }) {
     const { enqueueSnackbar } = useSnackbar();
     const [strike, setStrike] = useState('');
 
@@ -21,7 +21,10 @@ export default function UOAPanel({ list }) {
                 side: side
             }
         };
-        sendWebSocketMessage(message);
+        
+        // This now calls the function passed down from App.jsx
+        sendSocketMessage(message); 
+        
         enqueueSnackbar(`Sent request to watch ${strikeNum} ${side}.`, { variant: 'info' });
         setStrike(''); // Clear the input field
     };
