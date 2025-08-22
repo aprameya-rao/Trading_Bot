@@ -121,7 +121,7 @@ class Strategy:
     async def _update_ui_performance(self): payload = {"netPnl": self.daily_pnl, "grossProfit": self.daily_profit, "grossLoss": self.daily_loss, "wins": self.performance_stats["winning_trades"], "losses": self.performance_stats["losing_trades"]}; await self.manager.broadcast({"type": "daily_performance_update", "payload": payload})
     async def _update_ui_trade_status(self):
         payload = None
-        if self.position: p, ltp = self.position, self.prices.get(self.position["symbol"], self.position["entry_price"]); pnl = (ltp - p["entry_price"]) * p["qty"]; profit_pct = (((ltp - p["entry_price"]) / p["entry_price"]) * 100 if p["entry_price"] > 0 else 0); payload = {"symbol": p["symbol"], "entry_price": p["entry_price"], "pnl": pnl, "profit_pct": profit_pct, "trail_sl": p["trail_sl"], "max_price": p["max_price"]}
+        if self.position: p, ltp = self.position, self.prices.get(self.position["symbol"], self.position["entry_price"]); pnl = (ltp - p["entry_price"]) * p["qty"]; profit_pct = (((ltp - p["entry_price"]) / p["entry_price"]) * 100 if p["entry_price"] > 0 else 0); payload = {"symbol": p["symbol"], "entry_price": p["entry_price"],"ltp": ltp, "pnl": pnl, "profit_pct": profit_pct, "trail_sl": p["trail_sl"], "max_price": p["max_price"]}
         await self.manager.broadcast({"type": "trade_status_update", "payload": payload})
     async def _update_ui_trade_log(self): await self.manager.broadcast({"type": "trade_log_update", "payload": self.trade_log})
     async def _update_ui_uoa_list(self): await self.manager.broadcast({"type": "uoa_list_update", "payload": list(self.uoa_watchlist.values())})

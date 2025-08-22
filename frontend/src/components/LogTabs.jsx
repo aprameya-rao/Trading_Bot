@@ -146,7 +146,7 @@ function AnalyticsPanel() {
                         </TableRow>
                     </TableHead>
                     <TableBody>
-                        {trades.map((trade) => (
+                        {[...trades].reverse().map((trade) => (
                             <TableRow key={trade.id}>
                                 <TableCell>{new Date(trade.timestamp).toLocaleString()}</TableCell>
                                 <TableCell>{trade.symbol}</TableCell>

@@ -18,17 +18,46 @@ export default function CurrentTradePanel({ trade, onManualExit }) {
             </Paper>
         );
     }
-    const pnlColor = trade.pnl > 0 ? 'success.main' : trade.pnl < 0 ? 'error.main' : 'text.primary';
+
+    const pnlColor = trade.pnl >= 0 ? 'success.main' : 'error.main';
+    const ltp = trade.ltp || trade.entry_price; // Use LTP, fallback to entry price if needed
+
     return (
         <Paper elevation={3} sx={{ p: 2 }}>
             <Typography variant="body2" sx={{ mb: 1 }}>Current Trade</Typography>
-            <Typography sx={{ fontWeight: 'bold', mb: 2 }}>{trade.symbol} @ {trade.entry_price.toFixed(2)}</Typography>
-            <Grid container spacing={1}>
-                <Grid item xs={6}><Typography sx={{color: pnlColor}}>P&L: ₹ {trade.pnl.toFixed(2)}</Typography></Grid>
-                <Grid item xs={6}><Typography sx={{color: pnlColor}}>Profit: {trade.profit_pct.toFixed(2)} %</Typography></Grid>
-                <Grid item xs={6}><Typography>Trail SL: {trade.trail_sl.toFixed(2)}</Typography></Grid>
-                <Grid item xs={6}><Typography>Max Price: {trade.max_price.toFixed(2)}</Typography></Grid>
+            
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', mb: 2 }}>
+                <Typography variant="h6" sx={{ fontWeight: 'bold' }}>{trade.symbol}</Typography>
+                <Typography variant="body2">Entry @ {trade.entry_price.toFixed(2)}</Typography>
+            </Box>
+
+            <Grid container spacing={1.5} sx={{ textAlign: 'left' }}>
+                <Grid item xs={6}>
+                    <Typography variant="body2">LTP</Typography>
+                    <Typography variant="h6" sx={{ fontWeight: 'bold' }}>
+                        {ltp.toFixed(2)}
+                    </Typography>
+                </Grid>
+                <Grid item xs={6}>
+                    <Typography variant="body2">P&L</Typography>
+                    <Typography variant="h6" sx={{ color: pnlColor, fontWeight: 'bold' }}>
+                        ₹ {trade.pnl.toFixed(2)}
+                    </Typography>
+                </Grid>
+                <Grid item xs={6}>
+                    <Typography variant="body2">Trail SL</Typography>
+                    <Typography variant="h6" sx={{ fontWeight: 'bold' }}>
+                        {trade.trail_sl.toFixed(2)}
+                    </Typography>
+                </Grid>
+                <Grid item xs={6}>
+                    <Typography variant="body2">Profit %</Typography>
+                    <Typography variant="h6" sx={{ color: pnlColor, fontWeight: 'bold' }}>
+                        {trade.profit_pct.toFixed(2)} %
+                    </Typography>
+                </Grid>
             </Grid>
+            
             <Button 
                 fullWidth 
                 variant="contained" 
