@@ -12,7 +12,6 @@ import CurrentTradePanel from './components/CurrentTradePanel';
 import IndexChart from './components/IndexChart';
 import OptionChain from './components/OptionChain';
 import LogTabs from './components/LogTabs';
-import UOAPanel from './components/UOAPanel';
 import { createSocketConnection } from './services/socket';
 
 const MOCK_MODE = false;
@@ -122,7 +121,6 @@ function App() {
                         <Grid item><ParametersPanel isMock={MOCK_MODE} /></Grid>
                         <Grid item><IntelligencePanel /></Grid>
                         <Grid item><PerformancePanel data={dailyPerformance} /></Grid>
-                        <Grid item><UOAPanel list={uoaList} sendSocketMessage={sendSocketMessage} /></Grid>
                     </Grid>
                     <Grid item xs={12} md={8} sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                         <Box><IndexChart data={chartData} /></Box>

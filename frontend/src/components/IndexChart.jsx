@@ -2,137 +2,129 @@ import React, { useEffect, useRef } from 'react';
 import { createChart, ColorType } from 'lightweight-charts';
 import { Paper, Typography, Box, CircularProgress } from '@mui/material';
 
-// This function creates the chart with all its settings.
-const createMyChart = (container) => {
-    const chart = createChart(container, {
-        width: container.clientWidth,
-        height: container.clientHeight,
-        layout: {
-            background: { type: ColorType.Solid, color: '#ffffff' },
-            textColor: '#333',
+// We create a single configuration for both charts to share
+const commonChartOptions = {
+    layout: {
+        background: { type: ColorType.Solid, color: '#ffffff' },
+        textColor: '#333',
+    },
+    grid: { 
+        vertLines: { color: '#f0f0f0' }, 
+        horzLines: { color: '#f0f0f0' } 
+    },
+    timeScale: {
+        timeVisible: true,
+        secondsVisible: false,
+        borderColor: '#D1D4DC',
+        tickMarkFormatter: (time) => {
+            const date = new Date(time * 1000);
+            return date.toLocaleTimeString('en-IN', { 
+                timeZone: 'Asia/Kolkata', 
+                hour: '2-digit', 
+                minute: '2-digit', 
+                hour12: false 
+            });
         },
-        grid: { 
-            vertLines: { color: '#f0f0f0' }, 
-            horzLines: { color: '#f0f0f0' } 
-        },
-        timeScale: {
-            timeVisible: true,
-            secondsVisible: false,
-            borderColor: '#D1D4DC',
-            tickMarkFormatter: (time) => {
-                const date = new Date(time * 1000);
-                return date.toLocaleTimeString('en-IN', { 
-                    timeZone: 'Asia/Kolkata', 
-                    hour: '2-digit', 
-                    minute: '2-digit', 
-                    hour12: false 
-                });
-            },
-        },
-        rightPriceScale: { 
-            borderColor: '#D1D4DC' 
-        },
-        crosshair: { 
-            mode: 1 
-        },
-    });
-    return chart;
+    },
+    crosshair: { 
+        mode: 1 
+    },
+    rightPriceScale: { 
+        borderColor: '#D1D4DC' 
+    },
 };
 
 export default function IndexChart({ data }) {
-    const chartContainerRef = useRef(null);
-    const chartRef = useRef(null);
+    // Create separate refs for each chart container and instance
+    const rsiChartContainerRef = useRef(null);
+    const priceChartContainerRef = useRef(null);
+    const rsiChartRef = useRef(null);
+    const priceChartRef = useRef(null);
     const seriesRef = useRef({});
 
-    // This effect handles the INITIALIZATION and CLEANUP of the chart.
-    // It runs only when the component mounts.
     useEffect(() => {
-        if (!chartContainerRef.current) return;
+        if (!rsiChartContainerRef.current || !priceChartContainerRef.current) return;
 
-        const chart = createMyChart(chartContainerRef.current);
-        chartRef.current = chart;
-
-        // Add all the series to the chart
-        seriesRef.current.candlestickSeries = chart.addCandlestickSeries({ 
-            upColor: '#26a69a', 
-            downColor: '#ef5350', 
-            borderVisible: false, 
-            wickUpColor: '#26a69a', 
-            wickDownColor: '#ef5350' 
-        });
-        seriesRef.current.wmaSeries = chart.addLineSeries({ color: '#2962FF', lineWidth: 2, title: 'WMA', priceLineVisible: false, lastValueVisible: false });
-        seriesRef.current.smaSeries = chart.addLineSeries({ color: '#FF6D00', lineWidth: 2, title: 'SMA', priceLineVisible: false, lastValueVisible: false });
-        seriesRef.current.rsiSeries = chart.addLineSeries({ color: 'rgba(136, 132, 216, 0.7)', lineWidth: 2, title: 'RSI', priceScaleId: 'rsi', priceLineVisible: false, lastValueVisible: false });
-        seriesRef.current.rsiSmaSeries = chart.addLineSeries({ color: '#f5a623', lineWidth: 2, title: 'RSI SMA', priceScaleId: 'rsi', priceLineVisible: false, lastValueVisible: false });
-
-        // Create a separate pane for the RSI
-        chart.priceScale('rsi').applyOptions({
-            scaleMargins: { top: 0.8, bottom: 0 },
-            height: 225
+        // --- CREATE TWO SEPARATE CHART INSTANCES ---
+        const rsiChart = createChart(rsiChartContainerRef.current, {
+            ...commonChartOptions,
+            width: rsiChartContainerRef.current.clientWidth,
+            height: rsiChartContainerRef.current.clientHeight,
         });
 
-        // This is the crucial cleanup function. It will be called when the component unmounts.
-        return () => {
-            if (chartRef.current) {
-                chartRef.current.remove();
-                chartRef.current = null;
+        const priceChart = createChart(priceChartContainerRef.current, {
+            ...commonChartOptions,
+            width: priceChartContainerRef.current.clientWidth,
+            height: priceChartContainerRef.current.clientHeight,
+            timeScale: {
+                // Hide the time scale on the bottom chart to avoid duplication
+                visible: false, 
             }
-            seriesRef.current = {};
+        });
+
+        rsiChartRef.current = rsiChart;
+        priceChartRef.current = priceChart;
+
+        // --- ADD SERIES TO THEIR RESPECTIVE CHARTS ---
+        seriesRef.current.rsiSeries = rsiChart.addLineSeries({ color: 'rgba(136, 132, 216, 0.7)', lineWidth: 2, title: 'RSI' });
+        seriesRef.current.rsiSmaSeries = rsiChart.addLineSeries({ color: '#f5a623', lineWidth: 2, title: 'RSI SMA' });
+
+        seriesRef.current.candlestickSeries = priceChart.addCandlestickSeries({ upColor: '#26a69a', downColor: '#ef5350', borderVisible: false, wickUpColor: '#26a69a', wickDownColor: '#ef5350' });
+        seriesRef.current.wmaSeries = priceChart.addLineSeries({ color: '#2962FF', lineWidth: 2, title: 'WMA' });
+        seriesRef.current.smaSeries = priceChart.addLineSeries({ color: '#FF6D00', lineWidth: 2, title: 'SMA' });
+
+        // --- CRITICAL: SYNCHRONIZE THE TWO CHARTS ---
+        const syncTimeScales = (sourceChart, targetChart) => (range) => {
+            if (range) {
+                 targetChart.timeScale().setVisibleLogicalRange(range);
+            }
+        };
+        rsiChart.timeScale().subscribeVisibleLogicalRangeChange(syncTimeScales(rsiChart, priceChart));
+        priceChart.timeScale().subscribeVisibleLogicalRangeChange(syncTimeScales(priceChart, rsiChart));
+
+        // Cleanup function
+        return () => {
+            // Unsubscribe from events to prevent memory leaks
+            rsiChart.timeScale().unsubscribeVisibleLogicalRangeChange(syncTimeScales(rsiChart, priceChart));
+            priceChart.timeScale().unsubscribeVisibleLogicalRangeChange(syncTimeScales(priceChart, rsiChart));
+            rsiChart.remove();
+            priceChart.remove();
         };
     }, []);
 
-    // This effect handles DATA UPDATES.
-    // It runs whenever the `data` prop changes.
+    // This data update effect remains largely the same
     useEffect(() => {
-        if (!chartRef.current || Object.keys(seriesRef.current).length === 0 || !data) {
-            return; // Exit if the chart isn't ready or there's no data
-        }
+        if (!data || Object.keys(seriesRef.current).length < 5) return;
 
-        // Pass the new data to each respective chart series
         if (data.candles) seriesRef.current.candlestickSeries.setData(data.candles);
         if (data.wma) seriesRef.current.wmaSeries.setData(data.wma);
         if (data.sma) seriesRef.current.smaSeries.setData(data.sma);
         if (data.rsi) seriesRef.current.rsiSeries.setData(data.rsi);
         if (data.rsi_sma) seriesRef.current.rsiSmaSeries.setData(data.rsi_sma);
         
-        // Fit the content to the screen after the first data load
-        if(data.candles && data.candles.length > 0) {
-            chartRef.current.timeScale();
+        if (data.candles && data.candles.length > 0) {
+            rsiChartRef.current.timeScale();
         }
-
     }, [data]);
-
-    // This effect handles WINDOW RESIZING.
+    
+    // This resize effect needs to update both charts
     useEffect(() => {
         const handleResize = () => {
-            if (chartRef.current && chartContainerRef.current) {
-                chartRef.current.resize(chartContainerRef.current.clientWidth, chartContainerRef.current.clientHeight);
+            if (rsiChartRef.current && rsiChartContainerRef.current) {
+                rsiChartRef.current.resize(rsiChartContainerRef.current.clientWidth, rsiChartContainerRef.current.clientHeight);
+            }
+            if (priceChartRef.current && priceChartContainerRef.current) {
+                priceChartRef.current.resize(priceChartContainerRef.current.clientWidth, priceChartContainerRef.current.clientHeight);
             }
         };
         window.addEventListener('resize', handleResize);
         return () => window.removeEventListener('resize', handleResize);
     }, []);
 
+
     return (
-        <Paper 
-            elevation={3} 
-            sx={{ 
-                p: 2, 
-                height: '450px', 
-                display: 'flex', 
-                flexDirection: 'column' 
-            }}
-        >
-            <Box 
-                sx={{ 
-                    display: 'flex', 
-                    flexWrap: 'wrap', 
-                    gap: 2, 
-                    mb: 1, 
-                    alignItems: 'center', 
-                    flexShrink: 0 
-                }}
-            >
+        <Paper elevation={3} sx={{ p: 2, height: '450px', display: 'flex', flexDirection: 'column' }}>
+            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 2, mb: 1, alignItems: 'center', flexShrink: 0 }}>
                 <Typography variant="body2">Index Chart</Typography>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                     <Box sx={{ width: 12, height: 12, backgroundColor: '#FF6D00' }} />
@@ -151,25 +143,17 @@ export default function IndexChart({ data }) {
                     <Typography variant="caption">RSI SMA</Typography>
                 </Box>
             </Box>
-
-            <Box sx={{ width: '100%', flexGrow: 1, position: 'relative' }}>
+            
+            <Box sx={{ width: '100%', flexGrow: 1, display: 'flex', flexDirection: 'column', position: 'relative' }}>
                 {!data && (
-                    <Box 
-                        sx={{ 
-                            position: 'absolute', 
-                            top: 0, 
-                            left: 0, 
-                            right: 0, 
-                            bottom: 0, 
-                            display: 'flex', 
-                            alignItems: 'center', 
-                            justifyContent: 'center' 
-                        }}
-                    >
+                    <Box sx={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                         <CircularProgress />
                     </Box>
                 )}
-                <Box ref={chartContainerRef} sx={{ width: '100%', height: '100%' }} />
+                {/* Top Pane: 40% height */}
+                <Box ref={rsiChartContainerRef} sx={{ width: '100%', height: '30%' }} />
+                {/* Bottom Pane: 60% height */}
+                <Box ref={priceChartContainerRef} sx={{ width: '100%', height: '70%' }} />
             </Box>
         </Paper>
     );
