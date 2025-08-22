@@ -28,7 +28,7 @@ export default function CurrentTradePanel({ trade, onManualExit }) {
             
             <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', mb: 2 }}>
                 <Typography variant="h6" sx={{ fontWeight: 'bold' }}>{trade.symbol}</Typography>
-                <Typography variant="body2">Entry @ {trade.entry_price.toFixed(2)}</Typography>
+                <Typography variant="h6" sx={{ fontWeight: 'bold' }}>Entry @ {trade.entry_price.toFixed(2)}</Typography>
             </Box>
 
             <Grid container spacing={1.5} sx={{ textAlign: 'left' }}>
