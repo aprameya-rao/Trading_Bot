@@ -19,14 +19,16 @@ if TYPE_CHECKING:
 
 
 # --- Sound functions are disabled to prevent freezing ---
-async def _play_sound_on_frontend(manager, sound_name: str):
-    """Sends a WebSocket message to the frontend to play a sound."""
-    await manager.broadcast({"type": "play_sound", "payload": sound_name})
+def _play_sound_on_frontend(manager, sound_name: str):
+    """Sends a WebSocket message to the frontend to play a sound without blocking."""
+    # This schedules the broadcast to run in the background and does not wait for it.
+    print(f"--- Firing sound event: {sound_name} ---")
+    asyncio.create_task(manager.broadcast({"type": "play_sound", "payload": sound_name}))
 
-async def _play_entry_sound(manager): await _play_sound_on_frontend(manager, "entry")
-async def _play_profit_sound(manager): await _play_sound_on_frontend(manager, "profit")
-async def _play_loss_sound(manager): await _play_sound_on_frontend(manager, "loss")
-async def _play_warning_sound(manager): await _play_sound_on_frontend(manager, "warning")
+def _play_entry_sound(manager): _play_sound_on_frontend(manager, "entry")
+def _play_profit_sound(manager): _play_sound_on_frontend(manager, "profit")
+def _play_loss_sound(manager): _play_sound_on_frontend(manager, "loss")
+def _play_warning_sound(manager): _play_sound_on_frontend(manager, "warning")
 
 
 def calculate_wma(series, length=9):
@@ -279,9 +281,9 @@ class Strategy:
         if self.daily_trade_limit_hit:
             if log_this_time: await self._log_debug("Check.Entry", "-> FAIL: Daily trade limit (SL/PT) has been hit."); return
         if daily_sl < 0 and self.daily_pnl <= daily_sl:
-            self.daily_trade_limit_hit = True; await _play_warning_sound(self.manager); await self._log_debug("RISK", f"Daily Stop-Loss of {daily_sl} hit. Disabling trading."); return
+            self.daily_trade_limit_hit = True; _play_warning_sound(self.manager); await self._log_debug("RISK", f"Daily Stop-Loss of {daily_sl} hit. Disabling trading."); return
         if daily_pt > 0 and self.daily_pnl >= daily_pt:
-            self.daily_trade_limit_hit = True; await _play_profit_sound(self.manager); await self._log_debug("RISK", f"Daily Profit Target of {daily_pt} hit. Disabling trading."); return
+            self.daily_trade_limit_hit = True; _play_profit_sound(self.manager); await self._log_debug("RISK", f"Daily Profit Target of {daily_pt} hit. Disabling trading."); return
         if self.trades_this_minute >= 2:
             if log_this_time: await self._log_debug("Check.Entry", f"-> FAIL: Trade frequency limit for this minute ({self.trades_this_minute}/2) reached."); return
         if self.data_df.empty or len(self.data_df) < 20:
@@ -318,7 +320,7 @@ class Strategy:
             except Exception as e: await self._log_debug("LIVE TRADE ERROR", f"Order placement failed: {e}"); await _play_loss_sound(self.manager); return
         else: await self._log_debug("PAPER TRADE", f"Simulating BUY order for {qty} {symbol}.")
         self.position = {"symbol": symbol, "entry_price": price, "direction": side, "qty": qty, "trail_sl": round(initial_sl_price, 1), "max_price": price, "trigger_reason": trigger, "entry_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "lot_size": lot_size}
-        self.trades_this_minute += 1; self.performance_stats["total_trades"] += 1; await _play_entry_sound(self.manager)
+        self.trades_this_minute += 1; self.performance_stats["total_trades"] += 1; _play_entry_sound(self.manager)
         await self._update_ui_trade_status()
         await self._log_debug("Trade", f"Position taken: {symbol} @ {price} Qty: {qty} Trigger: {trigger}")
 
@@ -367,7 +369,7 @@ class Strategy:
         
         net_pnl = (exit_price - p["entry_price"]) * qty_to_exit
         self.daily_pnl += net_pnl
-        if net_pnl > 0: self.daily_profit += net_pnl; await _play_profit_sound(self.manager)
+        if net_pnl > 0: self.daily_profit += net_pnl; _play_profit_sound(self.manager)
         
         reason = f"Partial Profit-Take ({self.next_partial_profit_level})"
         trade_entry = (p["symbol"], qty_to_exit, datetime.now().strftime('%Y-%m-%d %H:%M:%S'), p["trigger_reason"], f"{p['entry_price']:.2f}", f"{exit_price:.2f}", f"{net_pnl:.2f}", reason)
@@ -391,8 +393,8 @@ class Strategy:
             except Exception as e: await self._log_debug("LIVE TRADE ERROR", f"Exit order placement failed: {e}"); await _play_loss_sound(self.manager)
         else: await self._log_debug("PAPER TRADE", f"Simulating SELL order for {p['qty']} {p['symbol']}.")
         net_pnl = (exit_price - p["entry_price"]) * p["qty"]; self.daily_pnl += net_pnl
-        if net_pnl > 0: self.performance_stats["winning_trades"] += 1; self.daily_profit += net_pnl; await _play_profit_sound(self.manager)
-        else: self.performance_stats["losing_trades"] += 1; self.daily_loss += net_pnl; await _play_loss_sound(self.manager)
+        if net_pnl > 0: self.performance_stats["winning_trades"] += 1; self.daily_profit += net_pnl; _play_profit_sound(self.manager)
+        else: self.performance_stats["losing_trades"] += 1; self.daily_loss += net_pnl; _play_loss_sound(self.manager)
         trade_entry = (p["symbol"], p["qty"], p["entry_time"], p["trigger_reason"], f"{p['entry_price']:.2f}", f"{exit_price:.2f}", f"{net_pnl:.2f}", reason)
         self.trade_log.append(trade_entry)
         log_info = {"timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "trigger_reason": p["trigger_reason"], "symbol": p["symbol"], "quantity": p["qty"], "pnl": round(net_pnl, 2), "entry_price": p["entry_price"], "exit_price": exit_price, "exit_reason": reason, "trend_state": self.trend_state}
@@ -607,13 +609,15 @@ class Strategy:
             token = opt.get('instrument_token', opt.get('tradingsymbol'))
             if token in self.uoa_watchlist: return False
             self.uoa_watchlist[token] = {'symbol': opt['tradingsymbol'], 'type': side, 'strike': strike}
-            await self._log_debug("UOA", f"Added {opt['tradingsymbol']} to watchlist."); await self._update_ui_uoa_list(); await _play_entry_sound(self.manager)
+            await self._log_debug("UOA", f"Added {opt['tradingsymbol']} to watchlist."); await self._update_ui_uoa_list();_play_entry_sound(self.manager)
             if self.ticker_manager and not self.is_backtest:
                 tokens = self.get_all_option_tokens()
                 await self.map_option_tokens(tokens)
                 self.ticker_manager.resubscribe(tokens)
             return True
-        await self._log_debug("UOA", f"Could not find {side} option for strike {strike}"); return False
+        await self._log_debug("UOA", f"Could not find {side} option for strike {strike}")
+        _play_warning_sound(self.manager) # <-- ADD THIS LINE to play a sound on failure
+        return False
 
     async def scan_for_unusual_activity(self):
         if self.is_backtest: return

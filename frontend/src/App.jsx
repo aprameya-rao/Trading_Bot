@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Grid, ThemeProvider, createTheme, CssBaseline, Box } from '@mui/material';
 import { useSnackbar } from 'notistack';
 import StatusPanel from './components/StatusPanel';
@@ -11,8 +11,17 @@ import OptionChain from './components/OptionChain';
 import LogTabs from './components/LogTabs';
 import UOAPanel from './components/UOAPanel';
 import { connectWebSocket, disconnectWebSocket } from './services/socket';
+import { Howl } from 'howler';
 
 const MOCK_MODE = false;
+
+
+const sounds = {
+  entry: new Howl({ src: ['/sound/entry.mp3'], volume: 0.7 }),
+  profit: new Howl({ src: ['/sound/profit.mp3'], volume: 0.7 }),
+  loss: new Howl({ src: ['/sound/loss.mp3'], volume: 0.7 }),
+  warning: new Howl({ src: ['/sound/warning.mp3'], volume: 1.0 }),
+};
 
 
 const lightTheme = createTheme({
@@ -51,6 +60,39 @@ function App() {
             }
         };
         connectWebSocket(handleSocketMessage); return () => disconnectWebSocket();
+    }, []);
+
+    useEffect(() => {
+        // ...
+        const handleSocketMessage = (data) => {
+            switch (data.type) {
+                case 'socket_status': setSocketStatus(data.payload); break;
+                // ... other cases
+                case 'chart_data_update': setChartData(data.payload); break;
+                
+                // --- ADD THIS NEW CASE ---
+                case 'play_sound':
+    // We added the keyword "Sound:" to the log
+    console.log(`--- Sound: Received event, trying to play: ${data.payload} ---`);
+
+    if (sounds[data.payload]) {
+        const sound = sounds[data.payload];
+
+        // Add a specific error listener for this sound
+        sound.once('playerror', function(id, error) {
+          console.error(`--- Sound: Howler Playback Error ---`, error);
+        });
+
+        sound.play();
+
+    } else {
+        console.warn(`--- Sound: Howler sound not found for payload: ${data.payload} ---`);
+    }
+    break;
+    }
+        };
+        connectWebSocket(handleSocketMessage);
+        return () => disconnectWebSocket();
     }, []);
 
     const handleManualExit = async () => {
