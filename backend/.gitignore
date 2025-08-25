@@ -15,6 +15,8 @@ access_token.json
 strategy_params.json
 trading_data_all.db
 trading_data_today.db
+last_run_date.txt
+
 
 # IDE & System Files
 .vscode/
