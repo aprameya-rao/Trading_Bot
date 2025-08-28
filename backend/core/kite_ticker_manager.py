@@ -1,4 +1,5 @@
 # backend/core/kite_ticker_manager.py
+
 import asyncio
 from kiteconnect import KiteTicker
 from core import kite as kite_api 
@@ -15,6 +16,9 @@ class KiteTickerManager:
         self.strategy = strategy_instance
         self.main_loop = main_loop
         self.is_connected = False
+        
+        # --- ADDED: Events to signal connection status ---
+        self.connected_event = asyncio.Event()
         self.disconnected_event = asyncio.Event()
 
         self.kws.on_ticks = self.on_ticks
@@ -27,39 +31,51 @@ class KiteTickerManager:
             asyncio.run_coroutine_threadsafe(self.strategy.handle_ticks_async(ticks), self.main_loop)
 
     def on_connect(self, ws, response):
-        print(">>> KITE TICKER MANAGER: 'on_connect' callback triggered. CONNECTION SUCCEEDED.")
+        print(">>> KITE TICKER MANAGER: 'on_connect' callback triggered.")
         self.is_connected = True
         self.disconnected_event.clear()
+        
+        # --- ADDED: Signal that the connection is successful ---
+        self.main_loop.call_soon_threadsafe(self.connected_event.set)
+        
         print("Kite Ticker connected.")
         if self.strategy:
              asyncio.run_coroutine_threadsafe(self.strategy.on_ticker_connect(), self.main_loop)
 
     def on_close(self, ws, code, reason):
-        print(f">>> KITE TICKER MANAGER: 'on_close' callback triggered. Code: {code}, Reason: {reason}")
+        print(f">>> KITE TICKER MANAGER: 'on_close' callback triggered.")
         self.is_connected = False
+        self.connected_event.clear()
+        
+        # --- UPDATED: Signal that the disconnection is complete ---
         self.main_loop.call_soon_threadsafe(self.disconnected_event.set)
         
         if self.strategy:
              asyncio.run_coroutine_threadsafe(self.strategy.on_ticker_disconnect(), self.main_loop)
 
     def on_error(self, ws, code, reason):
-        print(f">>> KITE TICKER MANAGER: 'on_error' callback triggered. Code: {code}, Reason: {reason}")
+        print(f">>> KITE TICKER MANAGER: 'on_error' callback triggered.")
+        # --- ADDED: Signal events on error to unblock waiting tasks ---
+        self.main_loop.call_soon_threadsafe(self.connected_event.set)
         self.main_loop.call_soon_threadsafe(self.disconnected_event.set)
 
     def start(self):
+        """
+        Initiates the connection in a background thread. This method is non-blocking.
+        """
         print(">>> KITE TICKER MANAGER: 'start' method called.")
         if not self.is_connected and kite_api.access_token:
-            print(">>> KITE TICKER MANAGER: Conditions met. Calling kws.connect().")
+            # Clear the event before attempting to connect
+            self.connected_event.clear()
             self.kws.connect(threaded=True)
-        elif self.is_connected:
-            print(">>> KITE TICKER MANAGER: Aborting start, already connected.")
-        elif not kite_api.access_token:
-            print(">>> KITE TICKER MANAGER: Aborting start, access token not available.")
 
     async def stop(self):
+        """
+        Stops the WebSocket connection and waits for confirmation of disconnection.
+        """
         print(">>> KITE TICKER MANAGER: 'stop' method called.")
         if self.is_connected and self.kws:
-            print(">>> KITE TICKER MANAGER: Closing connection.")
+            self.disconnected_event.clear()
             self.kws.close()
             try:
                 print(">>> KITE TICKER MANAGER: Waiting for disconnection confirmation...")
@@ -68,13 +84,16 @@ class KiteTickerManager:
             except asyncio.TimeoutError:
                 print(">>> KITE TICKER MANAGER: Warning: Timed out waiting for ticker to close.")
             finally:
-                # --- NEW: Explicitly dereference the kws object to aid garbage collection ---
                 self.kws = None
         else:
             print(">>> KITE TICKER MANAGER: 'stop' called, but not connected.")
             
     def resubscribe(self, tokens):
+        """
+        Subscribes to a list of instrument tokens.
+        """
         if self.is_connected and self.kws:
             print(f"Resubscribing to {len(tokens)} tokens.")
             self.kws.subscribe(tokens)
             self.kws.set_mode(self.kws.MODE_LTP, tokens)
+

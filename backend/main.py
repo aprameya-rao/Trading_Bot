@@ -147,7 +147,7 @@ async def get_trade_history():
 async def get_all_trade_history():
     """Fetches all trade history from the beginning of time."""
     try:
-        conn = sqlite3.connect('trading_data_today.db')
+        conn = sqlite3.connect('trading_data_all.db') # Corrected DB path
         df = pd.read_sql_query("SELECT * FROM trades ORDER BY timestamp ASC", conn)
         conn.close()
         return df.to_dict('records')
@@ -176,6 +176,7 @@ async def reset_parameters():
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to reset parameters: {e}")
 
+# --- UPDATED: The start_bot function is now more robust ---
 @app.post("/api/start")
 async def start_bot(start_request: StartRequest):
     global strategy_instance, ticker_manager_instance, uoa_scanner_task
@@ -183,23 +184,50 @@ async def start_bot(start_request: StartRequest):
         if ticker_manager_instance and ticker_manager_instance.is_connected:
             raise HTTPException(status_code=400, detail="Bot is already running.")
         
-        print(f"Starting bot with params: {start_request.params}")
-        main_event_loop = asyncio.get_running_loop()
-        strategy_instance = Strategy(
-            params=start_request.params, 
-            manager=manager, 
-            selected_index=start_request.selectedIndex
-        )
-        ticker_manager_instance = KiteTickerManager(strategy_instance, main_event_loop)
-        strategy_instance.ticker_manager = ticker_manager_instance
-        await strategy_instance.run()
-        ticker_manager_instance.start()
-        
-        if not uoa_scanner_task or uoa_scanner_task.done():
-            uoa_scanner_task = asyncio.create_task(uoa_scanner_worker())
-            
-        return {"status": "success", "message": "Bot started."}
+        try:
+            print(f"Starting bot with params: {start_request.params}")
+            main_event_loop = asyncio.get_running_loop()
+            strategy_instance = Strategy(
+                params=start_request.params, 
+                manager=manager, 
+                selected_index=start_request.selectedIndex
+            )
+            ticker_manager_instance = KiteTickerManager(strategy_instance, main_event_loop)
+            strategy_instance.ticker_manager = ticker_manager_instance
+            await strategy_instance.run()
 
+            # Start the connection process (non-blocking)
+            ticker_manager_instance.start()
+
+            # Wait for the connection to be confirmed by the event
+            print("Waiting for Kite Ticker connection...")
+            await asyncio.wait_for(ticker_manager_instance.connected_event.wait(), timeout=15)
+            
+            # Double-check if connection was actually successful
+            if not ticker_manager_instance.is_connected:
+                 raise Exception("Ticker failed to connect after start attempt.")
+
+            if not uoa_scanner_task or uoa_scanner_task.done():
+                uoa_scanner_task = asyncio.create_task(uoa_scanner_worker())
+                
+            print("Bot started successfully and ticker is connected.")
+            return {"status": "success", "message": "Bot started and connected."}
+
+        except asyncio.TimeoutError:
+            print("Error: Ticker connection timed out.")
+            # Clean up failed start attempt
+            if ticker_manager_instance: await ticker_manager_instance.stop()
+            ticker_manager_instance = None
+            strategy_instance = None
+            raise HTTPException(status_code=504, detail="Ticker connection timed out.")
+        except Exception as e:
+            print(f"Error during bot start: {e}")
+            if ticker_manager_instance: await ticker_manager_instance.stop()
+            ticker_manager_instance = None
+            strategy_instance = None
+            raise HTTPException(status_code=500, detail=str(e))
+
+# --- UPDATED: The stop_bot function is now more robust ---
 @app.post("/api/stop")
 async def stop_bot():
     global ticker_manager_instance, strategy_instance, uoa_scanner_task
@@ -209,15 +237,12 @@ async def stop_bot():
 
         print("Stopping bot...")
 
-        # --- MODIFICATION START ---
-        # Check if a trade is active and exit it before shutting down.
         if strategy_instance and strategy_instance.position:
             print("Active trade detected. Exiting position before stopping.")
             await strategy_instance.exit_position("Bot Stopped by User")
-            # Give a moment for the exit to process before continuing shutdown.
             await asyncio.sleep(1)
-        # --- MODIFICATION END ---
         
+        # This now correctly waits for the disconnection to be confirmed
         await ticker_manager_instance.stop()
         
         if strategy_instance and strategy_instance.ui_update_task:

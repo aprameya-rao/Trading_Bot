@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 def _play_sound_on_frontend(manager, sound_name: str):
     """Sends a WebSocket message to the frontend to play a sound without blocking."""
     # This schedules the broadcast to run in the background and does not wait for it.
-    print(f"--- Firing sound event: {sound_name} ---")
+    # print(f"--- Firing sound event: {sound_name} ---")
     asyncio.create_task(manager.broadcast({"type": "play_sound", "payload": sound_name}))
 
 def _play_entry_sound(manager): _play_sound_on_frontend(manager, "entry")
@@ -134,7 +134,6 @@ class Strategy:
         self.last_check_log_time, self.last_exit_log_time = None, None
         self.next_partial_profit_level = 1
         
-        # NEW: State variable to manage the post-exit cooldown period
         self.exit_cooldown_until: Optional[datetime] = None
 
         self.option_instruments = self.load_instruments(); self.last_used_expiry = self.get_weekly_expiry()
@@ -175,12 +174,16 @@ class Strategy:
         await self.manager.broadcast({"type": "status_update", "payload": payload})
 
     async def _update_ui_performance(self): payload = {"netPnl": self.daily_pnl, "grossProfit": self.daily_profit, "grossLoss": self.daily_loss, "wins": self.performance_stats["winning_trades"], "losses": self.performance_stats["losing_trades"]}; await self.manager.broadcast({"type": "daily_performance_update", "payload": payload})
+    
     async def _update_ui_trade_status(self):
         payload = None
         if self.position: p, ltp = self.position, self.prices.get(self.position["symbol"], self.position["entry_price"]); pnl = (ltp - p["entry_price"]) * p["qty"]; profit_pct = (((ltp - p["entry_price"]) / p["entry_price"]) * 100 if p["entry_price"] > 0 else 0); payload = {"symbol": p["symbol"], "entry_price": p["entry_price"],"ltp": ltp, "pnl": pnl, "profit_pct": profit_pct, "trail_sl": p["trail_sl"], "max_price": p["max_price"]}
         await self.manager.broadcast({"type": "trade_status_update", "payload": payload})
+    
     async def _update_ui_trade_log(self): await self.manager.broadcast({"type": "trade_log_update", "payload": self.trade_log})
+    
     async def _update_ui_uoa_list(self): await self.manager.broadcast({"type": "uoa_list_update", "payload": list(self.uoa_watchlist.values())})
+    
     async def _update_ui_option_chain(self):
         pairs = self.get_strike_pairs(); data = []
         if self.prices.get(self.index_symbol) and pairs:
@@ -232,7 +235,6 @@ class Strategy:
                     if token is not None and ltp is not None and (symbol := self.token_to_symbol.get(token)):
                         self.prices[symbol] = ltp
                         self.update_price_history(symbol, ltp)
-                        # The core logic is now handled in update_candle_and_indicators
                         await self.update_candle_and_indicators(ltp, symbol)
                         if self.position and self.position["symbol"] == symbol:
                             await self.evaluate_exit_logic()
@@ -248,7 +250,7 @@ class Strategy:
                 def get_data(): return kite.historical_data(self.index_token, datetime.now() - timedelta(days=7), datetime.now(), "minute")
                 loop = asyncio.get_running_loop(); data = await loop.run_in_executor(None, get_data)
                 if data:
-                    df = pd.DataFrame(data).tail(300); df.index = pd.to_datetime(df["date"])
+                    df = pd.DataFrame(data).tail(700); df.index = pd.to_datetime(df["date"])
                     self.data_df = self._calculate_indicators(df); await self._update_trend_state(); await self._log_debug("Bootstrap", f"Success! Historical data loaded with {len(self.data_df)} candles."); return
                 else: await self._log_debug("Bootstrap", f"Attempt {attempt}/3 failed: No data returned from API.")
             except Exception as e: await self._log_debug("Bootstrap", f"Attempt {attempt}/3 failed: {e}")
@@ -262,49 +264,33 @@ class Strategy:
         current_state = "BULLISH" if last["wma"] > last["sma"] else "BEARISH"
         if self.trend_state != current_state: self.trend_state = current_state; await self._log_debug("Trend", f"Trend is now {self.trend_state}.")
 
-    # =================================================================================
-    # MODIFIED: Core logic for continuous checking with cooldown
-    # =================================================================================
     async def update_candle_and_indicators(self, ltp, symbol=None):
         self.current_minute = datetime.now(timezone.utc).replace(second=0, microsecond=0)
         
-        # Update the appropriate candle (index or option)
         is_index = symbol is None or symbol == self.index_symbol
         candle_dict = self.current_candle if is_index else self.option_candles.setdefault(symbol, {})
         
         is_new_minute = candle_dict.get("minute") != self.current_minute
         
         if is_new_minute:
-            # This block now ONLY handles the logic for closing out the previous candle
             if is_index and "minute" in candle_dict:
-                self.trades_this_minute = 0 # Reset the trade counter for the new minute
+                self.trades_this_minute = 0
                 new_row = pd.DataFrame([candle_dict], index=[candle_dict["minute"]])
-                self.data_df = pd.concat([self.data_df, new_row]).tail(300)
+                self.data_df = pd.concat([self.data_df, new_row]).tail(700)
                 self.data_df = self._calculate_indicators(self.data_df)
                 await self._update_trend_state()
                 if self.pending_steep_signal:
                     await self.check_pending_steep_signal()
             
-            # Start the new candle for the current minute
             candle_dict.update({"minute": self.current_minute, "open": ltp, "high": ltp, "low": ltp, "close": ltp})
         else:
-            # Update the existing live candle for the current minute
             candle_dict.update({"high": max(candle_dict.get("high", ltp), ltp), "low": min(candle_dict.get("low", ltp), ltp), "close": ltp})
 
-        # --- Continuous Checking Logic ---
-        # This section runs on EVERY index tick.
         if is_index:
-            # Condition 1: Do not check for trades if we are already in a position.
             if self.position is not None:
                 return
-
-            # Condition 2: Do not check for trades if we are in the 5-second post-exit cooldown.
             if self.exit_cooldown_until and datetime.now() < self.exit_cooldown_until:
-                # Optional: Log that we are in cooldown
-                # await self._log_debug("Check.Entry", "-> HOLD: In post-exit cooldown period.")
                 return
-            
-            # If we passed both checks, it's safe to look for a new trade.
             await self.check_trade_entry()
 
     async def log_trade_decision(self, trade_info):
@@ -323,37 +309,19 @@ class Strategy:
                 except Exception as e: print(f"CRITICAL DB ERROR writing to {db_path}: {e}")
         async with self.db_lock:
             await asyncio.to_thread(db_call)
-            await self._log_debug("Database", f"Trade for {trade_info['symbol']} logged to both databases.")
+            await self._log_debug("Database", f"Trade for {trade_info['symbol']} logged.")
 
     async def check_trade_entry(self):
-        now = datetime.now()
-        log_this_time = self.last_check_log_time is None or (now - self.last_check_log_time) > timedelta(seconds=10)
-        
-        # --- CHANGE: All detailed logs in this section are now commented out ---
-        # if log_this_time:
-        #     self.last_check_log_time = now
-        #     await self._log_debug("Check.Entry", "--- Running All Entry Pre-Checks ---")
-
-        # PRE-CHECK 1: ATR/Volatility Check
+        # All verbose pre-check logs have been commented out to de-clutter the UI
         if not self.data_df.empty:
             last_atr = self.data_df.iloc[-1]['atr']
             min_atr_multiplier = 2 if self.index_name == "SENSEX" else 1
             min_atr = self.STRATEGY_PARAMS.get("min_atr_value", 4) * min_atr_multiplier
             is_atr_valid = pd.notna(last_atr) and last_atr >= min_atr
-            # if log_this_time:
-            #     atr_str = f"{last_atr:.2f}" if pd.notna(last_atr) else "N/A"
-            #     await self._log_debug("Pre-Check.ATR", f"-> CHECK: ATR ({atr_str}) >= Min ATR ({min_atr})? | RESULT: {'PASS' if is_atr_valid else 'FAIL'}")
             if not is_atr_valid: return
         
-        # PRE-CHECK 2: Open Position Check (Redundant due to caller check, but good for safety)
-        is_pos_open = self.position is not None
-        # if log_this_time:
-        #     await self._log_debug("Pre-Check.Position", f"-> CHECK: Is a position already open? | RESULT: {'FAIL' if is_pos_open else 'PASS'}")
-        if is_pos_open: return
+        if self.position is not None: return
 
-        # PRE-CHECK 3: Daily SL/PT Limit Check
-        # if log_this_time:
-        #     await self._log_debug("Pre-Check.Limits", f"-> CHECK: Daily trade limit (SL/PT) hit? | RESULT: {'FAIL' if self.daily_trade_limit_hit else 'PASS'}")
         if self.daily_trade_limit_hit: return
         
         daily_sl, daily_pt = self.params.get("daily_sl", 0), self.params.get("daily_pt", 0)
@@ -367,32 +335,20 @@ class Strategy:
                 _play_profit_sound(self.manager); await self._log_debug("RISK", f"Daily Profit Target of {daily_pt} hit. Disabling trading.")
             return
 
-        # PRE-CHECK 4: Trade Frequency Check
         max_trades_per_min = 2
         is_freq_ok = self.trades_this_minute < max_trades_per_min
-        # if log_this_time:
-        #     await self._log_debug("Pre-Check.Frequency", f"-> CHECK: Trades this minute ({self.trades_this_minute}) < Max ({max_trades_per_min})? | RESULT: {'PASS' if is_freq_ok else 'FAIL'}")
         if not is_freq_ok: return
 
-        # PRE-CHECK 5: Historical Data Check
         min_candles = 20
         has_enough_data = len(self.data_df) >= min_candles
-        # if log_this_time:
-        #     await self._log_debug("Pre-Check.Data", f"-> CHECK: Have enough candles ({len(self.data_df)}) >= Min ({min_candles})? | RESULT: {'PASS' if has_enough_data else 'FAIL'}")
         if not has_enough_data: return
-
-        # --- All Pre-Checks Passed, Evaluating Strategies ---
-        # if log_this_time: await self._log_debug("Check.Entry", "--- Pre-Checks Passed. Evaluating Strategies... ---")
         
-        # --- The `log` parameter is now set to False to disable detailed logging ---
         if await self.check_uoa_entry(log=False): return
         if await self.check_candlestick_entry(log=False): return
         if await self.check_ma_crossover_anticipation(log=False): return
         if await self.check_trend_continuation(log=False): return
         if self.check_steep_reentry(): return
         if await self.check_rsi_immediate_entry(log=False): return
-        
-        # if log_this_time: await self._log_debug("Check.Entry", "--- No entry conditions met this minute. ---")
 
     async def take_trade(self, trigger, opt):
         async with self.trade_lock:
@@ -442,7 +398,7 @@ class Strategy:
                 except Exception as e: await self._log_debug("LIVE TRADE ERROR", f"Order placement failed: {e}"); await _play_loss_sound(self.manager); return
             else: await self._log_debug("PAPER TRADE", f"Simulating BUY order for {qty} {symbol}.")
 
-            self.position = {"symbol": symbol, "entry_price": price, "direction": side, "qty": qty, "trail_sl": round(initial_sl_price, 1), "max_price": price, "trigger_reason": trigger, "entry_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "lot_size": lot_size}
+            self.position = {"symbol": symbol, "entry_price": price, "direction": side, "qty": qty, "trail_sl": round(initial_sl_price, 2), "max_price": price, "trigger_reason": trigger, "entry_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "lot_size": lot_size}
             self.trades_this_minute += 1; self.performance_stats["total_trades"] += 1; _play_entry_sound(self.manager)
             await self._update_ui_trade_status()
             await self._log_debug("Trade", f"Position taken: {symbol} @ {price} Qty: {qty} Trigger: {trigger}")
@@ -462,15 +418,8 @@ class Strategy:
                 return 
         if ltp > p["max_price"]: p["max_price"] = ltp
         sl_points, sl_percent = float(self.params["trailing_sl_points"]), float(self.params["trailing_sl_percent"])
-        p["trail_sl"] = round(max(p["trail_sl"], max(p["max_price"] - sl_points, p["max_price"] * (1 - sl_percent / 100))), 1)
-        now = datetime.now()
-        log_this_time = self.last_exit_log_time is None or (now - self.last_exit_log_time) > timedelta(seconds=5)
+        p["trail_sl"] = round(max(p["trail_sl"], max(p["max_price"] - sl_points, p["max_price"] * (1 - sl_percent / 100))), 2)
         
-        # --- CHANGE: Commented out the frequent exit check log ---
-        # if log_this_time:
-        #     self.last_exit_log_time = now
-        #     if not self.is_backtest: await self._log_debug("Check.Exit", f"LTP: {ltp:.2f} vs Trail SL: {p['trail_sl']:.2f}")
-
         if not self.is_backtest: await self._update_ui_trade_status()
         if ltp <= p["trail_sl"]: await self.exit_position("Trailing SL")
 
@@ -529,7 +478,7 @@ class Strategy:
                 def place_order_sync(): return kite.place_order(tradingsymbol=p["symbol"], exchange=self.exchange, transaction_type=kite.TRANSACTION_TYPE_SELL, quantity=p["qty"], variety=kite.VARIETY_REGULAR, order_type=kite.ORDER_TYPE_MARKET, product=kite.PRODUCT_MIS)
                 order_id = await asyncio.to_thread(place_order_sync)
                 await self._log_debug("LIVE TRADE", f"Placed SELL order for {p['qty']} {p['symbol']}. Order ID: {order_id}")
-            except Exception as e: await self._log_debug("LIVE TRADE ERROR", f"Exit order placement failed: {e}"); await _play_loss_sound(self.manager)
+            except Exception as e: await self._log_debug("LIVE TRADE ERROR", f"Exit order placement failed: {e}"); await _play_loss_sound(self.manager); return
         else: await self._log_debug("PAPER TRADE", f"Simulating SELL order for {p['qty']} {p['symbol']}.")
         
         net_pnl = (exit_price - p["entry_price"]) * p["qty"]; self.daily_pnl += net_pnl
@@ -543,7 +492,6 @@ class Strategy:
         
         self.position = None
         
-        # NEW: Set the 5-second cooldown timer upon full exit
         self.exit_cooldown_until = datetime.now() + timedelta(seconds=5)
         await self._log_debug("Cooldown", "Position exited. Starting 5-second entry cooldown.")
         
@@ -567,12 +515,8 @@ class Strategy:
     async def check_uoa_entry(self, log=False):
         try:
             if not self.uoa_watchlist: return False
-            # if log: await self._log_debug("Check.UOA", f"--- Evaluating {len(self.uoa_watchlist)} UOA item(s) ---")
-            
             for token, data in list(self.uoa_watchlist.items()):
                 symbol, side = data['symbol'], data['type']
-                # if log: await self._log_debug("Check.UOA", f"[{symbol}] Mode: {self.aggressiveness}")
-
                 current_second = datetime.now().second
                 is_in_confirmation_period = current_second < 10 and not self.is_backtest
                 if is_in_confirmation_period: continue
@@ -608,7 +552,6 @@ class Strategy:
 
     async def check_ma_crossover_anticipation(self, log=False):
         try:
-            # if log: await self._log_debug("Check.MA", "--- Evaluating MA Crossover Anticipation ---")
             last = self.data_df.iloc[-1]; wma, sma = last['wma'], last['sma']
             if pd.isna(wma) or pd.isna(sma):
                 return False
@@ -640,7 +583,6 @@ class Strategy:
     async def check_trend_continuation(self, log=False):
         try:
             if not self.trend_state: return False
-            # if log: await self._log_debug("Check.Trend", f"--- Evaluating Trend Continuation ({self.trend_state} / {self.aggressiveness}) ---")
             
             side = 'CE' if self.trend_state == 'BULLISH' else 'PE'
             opt = self.get_entry_option(side)
@@ -672,11 +614,10 @@ class Strategy:
     async def check_candlestick_entry(self, log=False):
         try:
             if len(self.data_df) < 4: return False
-            # if log: await self._log_debug("Check.Candles", "--- Evaluating Candlestick Patterns ---")
             
             candle_minus_3, pattern_candle, confirm_candle = self.data_df.iloc[-3], self.data_df.iloc[-2], self.data_df.iloc[-1]
             
-            if self.trend_state == 'BEARISH': # Look for Bullish Reversals
+            if self.trend_state == 'BEARISH':
                 if is_bullish_engulfing(candle_minus_3, pattern_candle):
                     if confirm_candle['close'] > confirm_candle['open'] and confirm_candle['close'] > pattern_candle['high']:
                         opt = self.get_entry_option('CE')
@@ -692,7 +633,7 @@ class Strategy:
                         opt = self.get_entry_option('CE')
                         if opt and self.is_price_rising(opt['tradingsymbol']): await self.take_trade('Candle_InvHammer', opt); return True
 
-            if self.trend_state == 'BULLISH': # Look for Bearish Reversals
+            if self.trend_state == 'BULLISH':
                 if is_bearish_engulfing(candle_minus_3, pattern_candle):
                     if confirm_candle['open'] > confirm_candle['close'] and confirm_candle['close'] < pattern_candle['low']:
                         opt = self.get_entry_option('PE')
@@ -735,7 +676,6 @@ class Strategy:
     async def check_rsi_immediate_entry(self, log=False):
         try:
             if len(self.data_df) < self.STRATEGY_PARAMS['rsi_angle_lookback'] + 2: return False
-            # if log: await self._log_debug("Check.RSI", "--- Evaluating RSI Immediate Entry ---")
             
             last, prev = self.data_df.iloc[-1], self.data_df.iloc[-2]
             if any(pd.isna(v) for v in [last['rsi'], prev['rsi'], last['rsi_sma'], prev['rsi_sma']]):

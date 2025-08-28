@@ -71,7 +71,7 @@ function App() {
                             break;
                         case 'daily_performance_update': setDailyPerformance(data.payload); break;
                         case 'trade_status_update': setCurrentTrade(data.payload); break;
-                        case 'debug_log': setDebugLogs(prev => [data.payload, ...prev].slice(0, 22)); break;
+                        case 'debug_log': setDebugLogs(prev => [data.payload, ...prev]); break;
                         case 'trade_log_update': setTradeHistory(data.payload); break;
                         case 'option_chain_update': setOptionChain(data.payload); break;
                         case 'uoa_list_update': setUoaList(data.payload); break;
