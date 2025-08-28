@@ -1,8 +1,10 @@
+// frontend/src/components/ParametersPanel.jsx
 import React, { useState, useEffect, useCallback } from 'react';
 import { Paper, Typography, Grid, TextField, Select, MenuItem, Button, FormControl, InputLabel, CircularProgress, Box, Checkbox, FormControlLabel } from '@mui/material';
 import { useSnackbar } from 'notistack';
 
-export default function ParametersPanel({ isMock = false }) {
+// --- CHANGE: Component now accepts `isBotRunning` as a prop ---
+export default function ParametersPanel({ isMock = false, isBotRunning }) {
     const { enqueueSnackbar } = useSnackbar();
     
     const [auth, setAuth] = useState({ 
@@ -11,24 +13,33 @@ export default function ParametersPanel({ isMock = false }) {
         user: '' 
     });
     
-    const [params, setParams] = useState({ 
-        selectedIndex: 'SENSEX', 
-        trading_mode: 'Paper Trading', 
-        aggressiveness: 'Moderate', 
-        start_capital: 50000,
-        risk_per_trade_percent: 1.0,
-        trailing_sl_points: 2, 
-        trailing_sl_percent: 1, 
-        daily_sl: -2000, 
-        daily_pt: 4000, 
-        partial_profit_pct: 5,
-        partial_exit_pct: 50,
-        auto_scan_uoa: false 
+    // --- CHANGE: `useState` initializer now reads from localStorage ---
+    const [params, setParams] = useState(() => {
+        const savedParams = localStorage.getItem('tradingParams');
+        return savedParams ? JSON.parse(savedParams) : {
+            selectedIndex: 'SENSEX', 
+            trading_mode: 'Paper Trading', 
+            aggressiveness: 'Moderate', 
+            start_capital: 50000,
+            risk_per_trade_percent: 2.0,
+            trailing_sl_points: 5, 
+            trailing_sl_percent: 2.5, 
+            daily_sl: -20000, 
+            daily_pt: 40000, 
+            partial_profit_pct: 3,
+            partial_exit_pct: 30,
+            auto_scan_uoa: false
+        };
     });
     
     const [loading, setLoading] = useState(false);
-    const [botRunning, setBotRunning] = useState(false);
+    // --- CHANGE: Local `botRunning` state has been removed ---
     const [reqToken, setReqToken] = useState('');
+
+    // --- CHANGE: New useEffect hook to save params to localStorage on any change ---
+    useEffect(() => {
+        localStorage.setItem('tradingParams', JSON.stringify(params));
+    }, [params]);
 
     const fetchStatus = useCallback(async () => {
         try {
@@ -94,18 +105,21 @@ export default function ParametersPanel({ isMock = false }) {
     };
     
     const handleStartStop = async () => {
-        if (isMock) { setBotRunning(!botRunning); return; }
+        if (isMock) { return; }
         setLoading(true);
-        const endpoint = botRunning ? '/api/stop' : '/api/start';
+        // --- CHANGE: Use `isBotRunning` prop to determine the endpoint ---
+        const endpoint = isBotRunning ? '/api/stop' : '/api/start';
         try {
             const res = await fetch(`http://localhost:8000${endpoint}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: botRunning ? '' : JSON.stringify({ params, selectedIndex: params.selectedIndex })
+                // --- CHANGE: Use `isBotRunning` prop to determine the body ---
+                body: isBotRunning ? '' : JSON.stringify({ params, selectedIndex: params.selectedIndex })
             });
             const data = await res.json();
             if (!res.ok) { throw new Error(data.detail || 'Action failed.'); }
-            setBotRunning(!botRunning);
+            
+            // --- CHANGE: Local state update is removed. The WebSocket message will handle it. ---
             enqueueSnackbar(data.message, { variant: 'info' });
         } catch (error) {
             console.error("Action failed", error);
@@ -186,7 +200,8 @@ export default function ParametersPanel({ isMock = false }) {
                                     value={params[field.name]}
                                     label={field.label}
                                     onChange={handleChange}
-                                    disabled={botRunning}
+                                    // --- CHANGE: Use isBotRunning prop ---
+                                    disabled={isBotRunning}
                                 >
                                     {field.options.map(opt => <MenuItem key={opt} value={opt}>{opt}</MenuItem>)}
                                 </Select>
@@ -200,28 +215,31 @@ export default function ParametersPanel({ isMock = false }) {
                                 onChange={handleChange}
                                 size="small"
                                 fullWidth
-                                disabled={botRunning}
+                                // --- CHANGE: Use isBotRunning prop ---
+                                disabled={isBotRunning}
                             />
                         )}
                     </Grid>
                 ))}
                 <Grid item xs={12}>
                     <FormControlLabel 
-                        control={<Checkbox name="auto_scan_uoa" checked={params.auto_scan_uoa} onChange={handleChange} disabled={botRunning} />} 
+                        control={<Checkbox name="auto_scan_uoa" checked={params.auto_scan_uoa} onChange={handleChange} disabled={isBotRunning} />} 
                         label="Enable Auto-Scan for UOA" 
                     />
                 </Grid>
             </Grid>
-            <Button fullWidth sx={{ mt: 2 }} variant="outlined" disabled={botRunning}>Apply Changes</Button>
+            {/* The "Apply Changes" button has been removed as changes are now saved automatically */}
             <Button
                 fullWidth
-                sx={{ mt: 1 }}
+                sx={{ mt: 2 }}
                 variant="contained"
-                color={botRunning ? "error" : "success"}
+                // --- CHANGE: Use isBotRunning prop ---
+                color={isBotRunning ? "error" : "success"}
                 onClick={handleStartStop}
                 disabled={loading}
             >
-                {loading ? <CircularProgress size={24} /> : (botRunning ? 'Stop Trading Bot' : 'Start Trading Bot')}
+                {/* --- CHANGE: Use isBotRunning prop --- */}
+                {loading ? <CircularProgress size={24} /> : (isBotRunning ? 'Stop Trading Bot' : 'Start Trading Bot')}
             </Button>
         </Paper>
     );

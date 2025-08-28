@@ -208,6 +208,16 @@ async def stop_bot():
             raise HTTPException(status_code=400, detail="Bot is not running.")
 
         print("Stopping bot...")
+
+        # --- MODIFICATION START ---
+        # Check if a trade is active and exit it before shutting down.
+        if strategy_instance and strategy_instance.position:
+            print("Active trade detected. Exiting position before stopping.")
+            await strategy_instance.exit_position("Bot Stopped by User")
+            # Give a moment for the exit to process before continuing shutdown.
+            await asyncio.sleep(1)
+        # --- MODIFICATION END ---
+        
         await ticker_manager_instance.stop()
         
         if strategy_instance and strategy_instance.ui_update_task:

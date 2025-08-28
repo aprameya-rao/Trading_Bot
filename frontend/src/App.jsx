@@ -32,6 +32,7 @@ const lightTheme = createTheme({
 function App() {
     const { enqueueSnackbar } = useSnackbar();
     const socketRef = useRef(null);
+    const reconnectTimerRef = useRef(null); // Ref to hold the reconnection timer
 
     // All application state
     const [chartData, setChartData] = useState(null);
@@ -43,6 +44,9 @@ function App() {
     const [optionChain, setOptionChain] = useState([]);
     const [uoaList, setUoaList] = useState([]);
     const [socketStatus, setSocketStatus] = useState('DISCONNECTED');
+    
+    // --- CHANGE: State for bot running status, controlled by backend ---
+    const [isBotRunning, setIsBotRunning] = useState(false);
 
     const sendSocketMessage = useCallback((message) => {
         if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
@@ -52,49 +56,79 @@ function App() {
         }
     }, []);
     
+    // --- CHANGE: Replaced original useEffect with one that handles reconnection ---
     useEffect(() => {
-        if (MOCK_MODE) { return; }
-
-        const handleMessage = (event) => {
-            try {
-                const data = JSON.parse(event.data);
-                // The main dispatcher for all incoming messages
-                switch (data.type) {
-                    case 'status_update': setBotStatus(data.payload); break;
-                    case 'daily_performance_update': setDailyPerformance(data.payload); break;
-                    case 'trade_status_update': setCurrentTrade(data.payload); break;
-                    case 'debug_log': setDebugLogs(prev => [data.payload, ...prev].slice(0, 22)); break;
-                    case 'trade_log_update': setTradeHistory(data.payload); break;
-                    case 'option_chain_update': setOptionChain(data.payload); break;
-                    case 'uoa_list_update': setUoaList(data.payload); break;
-                    case 'chart_data_update': setChartData(data.payload); break;
-                    case 'play_sound':
-                        if (sounds[data.payload]) {
-                            sounds[data.payload].play();
-                        }
-                        break;
+        const connect = () => {
+            const handleMessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    // The main dispatcher for all incoming messages
+                    switch (data.type) {
+                        case 'status_update':
+                            setBotStatus(data.payload);
+                            // Update the running state from the backend's single source of truth
+                            setIsBotRunning(data.payload.is_running);
+                            break;
+                        case 'daily_performance_update': setDailyPerformance(data.payload); break;
+                        case 'trade_status_update': setCurrentTrade(data.payload); break;
+                        case 'debug_log': setDebugLogs(prev => [data.payload, ...prev].slice(0, 22)); break;
+                        case 'trade_log_update': setTradeHistory(data.payload); break;
+                        case 'option_chain_update': setOptionChain(data.payload); break;
+                        case 'uoa_list_update': setUoaList(data.payload); break;
+                        case 'chart_data_update': setChartData(data.payload); break;
+                        case 'play_sound':
+                            if (sounds[data.payload]) {
+                                sounds[data.payload].play();
+                            }
+                            break;
+                    }
+                } catch (error) {
+                    console.error("Failed to parse socket message:", event.data, error);
                 }
-            } catch (error) {
-                console.error("Failed to parse socket message:", event.data, error);
+            };
+
+            const handleClose = () => {
+                setSocketStatus('DISCONNECTED');
+                console.log("WebSocket closed. Attempting to reconnect in 5 seconds...");
+                // Set a timer to reconnect
+                reconnectTimerRef.current = setTimeout(connect, 5000);
+            };
+
+            // Clear any existing timer before trying to connect
+            if (reconnectTimerRef.current) {
+                clearTimeout(reconnectTimerRef.current);
             }
+
+            // Close any existing socket before creating a new one
+            if (socketRef.current) {
+                socketRef.current.close();
+            }
+
+            socketRef.current = createSocketConnection(
+                () => setSocketStatus('CONNECTED'),
+                handleMessage,
+                handleClose, // Use our new handler that triggers reconnection
+                (error) => console.error('Socket error:', error)
+            );
         };
 
-        // Create the connection and store it in the ref
-        socketRef.current = createSocketConnection(
-            () => setSocketStatus('CONNECTED'),
-            handleMessage,
-            () => setSocketStatus('DISCONNECTED'),
-            (error) => console.error('Socket error:', error)
-        );
+        if (!MOCK_MODE) {
+            connect(); // Initial connection attempt
+        }
 
         // This is the crucial cleanup function
         return () => {
+            console.log("Cleaning up WebSocket and reconnection timer.");
+            // Clear the timer on component unmount
+            if (reconnectTimerRef.current) {
+                clearTimeout(reconnectTimerRef.current);
+            }
+            // Close the connection on component unmount
             if (socketRef.current) {
-                console.log("Cleaning up WebSocket connection.");
                 socketRef.current.close();
             }
         };
-    }, []); // Empty array ensures this runs only on mount and unmount
+    }, [MOCK_MODE]); // Empty dependency array ensures this runs only on mount and unmount
 
     const handleManualExit = async () => {
         if (window.confirm('Are you sure you want to manually exit the current trade?')) {
@@ -118,7 +152,8 @@ function App() {
                     <Grid item xs={12} md={4} container direction="column" spacing={2} wrap="nowrap">
                         <Grid item><StatusPanel status={botStatus} socketStatus={socketStatus} /></Grid>
                         <Grid item><CurrentTradePanel trade={currentTrade} onManualExit={handleManualExit} /></Grid>
-                        <Grid item><ParametersPanel isMock={MOCK_MODE} /></Grid>
+                        {/* --- CHANGE: Pass the isBotRunning state down as a prop --- */}
+                        <Grid item><ParametersPanel isMock={MOCK_MODE} isBotRunning={isBotRunning} /></Grid>
                         <Grid item><IntelligencePanel /></Grid>
                         <Grid item><PerformancePanel data={dailyPerformance} /></Grid>
                     </Grid>
