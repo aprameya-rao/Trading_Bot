@@ -110,7 +110,7 @@ class Strategy:
         self.today_db_path = "trading_data_today.db"
         self.all_db_path = "trading_data_all.db"
         self.ui_update_task: Optional[asyncio.Task] = None
-        self.trade_lock = asyncio.Lock()
+        self.position_lock = asyncio.Lock()
         self.db_lock = asyncio.Lock()
 
         try:
@@ -351,7 +351,7 @@ class Strategy:
         if await self.check_rsi_immediate_entry(log=False): return
 
     async def take_trade(self, trigger, opt):
-        async with self.trade_lock:
+        async with self.position_lock:
             self.next_partial_profit_level = 1
             if self.position or not opt: return
             symbol, side, price, lot_size = (opt["tradingsymbol"], opt["instrument_type"], self.prices.get(opt["tradingsymbol"]), opt.get("lot_size"))
@@ -404,24 +404,25 @@ class Strategy:
             await self._log_debug("Trade", f"Position taken: {symbol} @ {price} Qty: {qty} Trigger: {trigger}")
 
     async def evaluate_exit_logic(self):
-        if not self.position: return
-        p, ltp = self.position, self.prices.get(self.position["symbol"])
-        if ltp is None: return
-        partial_profit_pct = self.params.get("partial_profit_pct", 0)
-        if partial_profit_pct > 0:
-            profit_pct = (((ltp - p["entry_price"]) / p["entry_price"]) * 100 if p["entry_price"] > 0 else 0)
-            target_profit_pct = partial_profit_pct * self.next_partial_profit_level
-            if profit_pct >= target_profit_pct:
-                await self._log_debug("Profit.Take", f"Target of {target_profit_pct:.2f}% reached (current: {profit_pct:.2f}%).")
-                await self.partial_exit_position()
-                self.next_partial_profit_level += 1
-                return 
-        if ltp > p["max_price"]: p["max_price"] = ltp
-        sl_points, sl_percent = float(self.params["trailing_sl_points"]), float(self.params["trailing_sl_percent"])
-        p["trail_sl"] = round(max(p["trail_sl"], max(p["max_price"] - sl_points, p["max_price"] * (1 - sl_percent / 100))), 2)
-        
-        if not self.is_backtest: await self._update_ui_trade_status()
-        if ltp <= p["trail_sl"]: await self.exit_position("Trailing SL")
+        async with self.position_lock:
+            if not self.position: return
+            p, ltp = self.position, self.prices.get(self.position["symbol"])
+            if ltp is None: return
+            partial_profit_pct = self.params.get("partial_profit_pct", 0)
+            if partial_profit_pct > 0:
+                profit_pct = (((ltp - p["entry_price"]) / p["entry_price"]) * 100 if p["entry_price"] > 0 else 0)
+                target_profit_pct = partial_profit_pct * self.next_partial_profit_level
+                if profit_pct >= target_profit_pct:
+                    await self._log_debug("Profit.Take", f"Target of {target_profit_pct:.2f}% reached (current: {profit_pct:.2f}%).")
+                    await self.partial_exit_position()
+                    self.next_partial_profit_level += 1
+                    return 
+            if ltp > p["max_price"]: p["max_price"] = ltp
+            sl_points, sl_percent = float(self.params["trailing_sl_points"]), float(self.params["trailing_sl_percent"])
+            p["trail_sl"] = round(max(p["trail_sl"], max(p["max_price"] - sl_points, p["max_price"] * (1 - sl_percent / 100))), 2)
+
+            if not self.is_backtest: await self._update_ui_trade_status()
+            if ltp <= p["trail_sl"]: await self.exit_position("Trailing SL")
 
     async def partial_exit_position(self):
         if not self.position: return
