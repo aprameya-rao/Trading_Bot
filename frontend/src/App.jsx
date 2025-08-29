@@ -1,9 +1,6 @@
-// frontend/src/App.jsx
-
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useEffect, useRef, useCallback } from 'react';
 import { Howl } from 'howler';
 import { Grid, ThemeProvider, createTheme, CssBaseline, Box } from '@mui/material';
-import { useSnackbar } from 'notistack';
 import StatusPanel from './components/StatusPanel';
 import ParametersPanel from './components/ParametersPanel';
 import IntelligencePanel from './components/IntelligencePanel';
@@ -13,6 +10,9 @@ import IndexChart from './components/IndexChart';
 import OptionChain from './components/OptionChain';
 import LogTabs from './components/LogTabs';
 import { createSocketConnection } from './services/socket';
+import { manualExit } from './services/api';
+import { useStore } from './store/store';
+import { useSnackbar } from 'notistack';
 
 const MOCK_MODE = false;
 
@@ -32,55 +32,42 @@ const lightTheme = createTheme({
 function App() {
     const { enqueueSnackbar } = useSnackbar();
     const socketRef = useRef(null);
-    const reconnectTimerRef = useRef(null); // Ref to hold the reconnection timer
+    const reconnectTimerRef = useRef(null);
 
-    // All application state
-    const [chartData, setChartData] = useState(null);
-    const [botStatus, setBotStatus] = useState({ connection: 'DISCONNECTED', mode: 'NOT STARTED', indexPrice: 0, trend: '---', indexName: 'INDEX' });
-    const [dailyPerformance, setDailyPerformance] = useState({ netPnl: 0, grossProfit: 0, grossLoss: 0, wins: 0, losses: 0 });
-    const [currentTrade, setCurrentTrade] = useState(null);
-    const [debugLogs, setDebugLogs] = useState([]);
-    const [tradeHistory, setTradeHistory] = useState([]);
-    const [optionChain, setOptionChain] = useState([]);
-    const [uoaList, setUoaList] = useState([]);
-    const [socketStatus, setSocketStatus] = useState('DISCONNECTED');
-    
-    // --- CHANGE: State for bot running status, controlled by backend ---
-    const [isBotRunning, setIsBotRunning] = useState(false);
+    // --- FIX #1: Select only the state needed for rendering. Actions will be called differently. ---
+    const { 
+        botStatus, dailyPerformance, currentTrade, debugLogs, tradeHistory, 
+        optionChain, chartData, socketStatus
+    } = useStore();
 
     const sendSocketMessage = useCallback((message) => {
-        if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
+        if (socketRef.current?.readyState === WebSocket.OPEN) {
             socketRef.current.send(JSON.stringify(message));
         } else {
             console.error("Cannot send message, WebSocket is not open.");
         }
     }, []);
     
-    // --- CHANGE: Replaced original useEffect with one that handles reconnection ---
+    // --- FIX #3: The dependency array is now stable and correct. ---
     useEffect(() => {
+        // --- FIX #2: Get actions directly from the store inside the effect. ---
+        // This prevents them from being dependencies and causing the loop.
+        const { getState, setState } = useStore;
+
         const connect = () => {
             const handleMessage = (event) => {
                 try {
                     const data = JSON.parse(event.data);
-                    // The main dispatcher for all incoming messages
                     switch (data.type) {
-                        case 'status_update':
-                            setBotStatus(data.payload);
-                            // Update the running state from the backend's single source of truth
-                            setIsBotRunning(data.payload.is_running);
-                            break;
-                        case 'daily_performance_update': setDailyPerformance(data.payload); break;
-                        case 'trade_status_update': setCurrentTrade(data.payload); break;
-                        case 'debug_log': setDebugLogs(prev => [data.payload, ...prev]); break;
-                        case 'trade_log_update': setTradeHistory(data.payload); break;
-                        case 'option_chain_update': setOptionChain(data.payload); break;
-                        case 'uoa_list_update': setUoaList(data.payload); break;
-                        case 'chart_data_update': setChartData(data.payload); break;
-                        case 'play_sound':
-                            if (sounds[data.payload]) {
-                                sounds[data.payload].play();
-                            }
-                            break;
+                        case 'status_update': getState().updateBotStatus(data.payload); break;
+                        case 'daily_performance_update': getState().updateDailyPerformance(data.payload); break;
+                        case 'trade_status_update': getState().updateCurrentTrade(data.payload); break;
+                        case 'debug_log': getState().addDebugLog(data.payload); break;
+                        case 'trade_log_update': getState().updateTradeHistory(data.payload); break;
+                        case 'option_chain_update': getState().updateOptionChain(data.payload); break;
+                        case 'uoa_list_update': getState().updateUoaList(data.payload); break;
+                        case 'chart_data_update': getState().updateChartData(data.payload); break;
+                        case 'play_sound': if (sounds[data.payload]) sounds[data.payload].play(); break;
                     }
                 } catch (error) {
                     console.error("Failed to parse socket message:", event.data, error);
@@ -88,57 +75,35 @@ function App() {
             };
 
             const handleClose = () => {
-                setSocketStatus('DISCONNECTED');
-                console.log("WebSocket closed. Attempting to reconnect in 5 seconds...");
-                // Set a timer to reconnect
+                setState({ socketStatus: 'DISCONNECTED' });
                 reconnectTimerRef.current = setTimeout(connect, 5000);
             };
 
-            // Clear any existing timer before trying to connect
-            if (reconnectTimerRef.current) {
-                clearTimeout(reconnectTimerRef.current);
-            }
-
-            // Close any existing socket before creating a new one
-            if (socketRef.current) {
-                socketRef.current.close();
-            }
+            if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+            if (socketRef.current) socketRef.current.close();
 
             socketRef.current = createSocketConnection(
-                () => setSocketStatus('CONNECTED'),
-                handleMessage,
-                handleClose, // Use our new handler that triggers reconnection
+                () => setState({ socketStatus: 'CONNECTED' }), 
+                handleMessage, 
+                handleClose, 
                 (error) => console.error('Socket error:', error)
             );
         };
 
-        if (!MOCK_MODE) {
-            connect(); // Initial connection attempt
-        }
+        if (!MOCK_MODE) connect();
 
-        // This is the crucial cleanup function
         return () => {
-            console.log("Cleaning up WebSocket and reconnection timer.");
-            // Clear the timer on component unmount
-            if (reconnectTimerRef.current) {
-                clearTimeout(reconnectTimerRef.current);
-            }
-            // Close the connection on component unmount
-            if (socketRef.current) {
-                socketRef.current.close();
-            }
+            if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+            if (socketRef.current) socketRef.current.close();
         };
-    }, [MOCK_MODE]); // Empty dependency array ensures this runs only on mount and unmount
+    }, [MOCK_MODE]); // The dependency array is now stable.
 
     const handleManualExit = async () => {
         if (window.confirm('Are you sure you want to manually exit the current trade?')) {
             try {
-                const res = await fetch('http://localhost:8000/api/manual_exit', { method: 'POST' });
-                const data = await res.json();
-                if (!res.ok) { throw new Error(data.detail); }
+                const data = await manualExit();
                 enqueueSnackbar(data.message, { variant: 'warning' });
             } catch (error) {
-                console.error("Manual exit failed", error);
                 enqueueSnackbar(error.message, { variant: 'error' });
             }
         }
@@ -152,15 +117,14 @@ function App() {
                     <Grid item xs={12} md={4} container direction="column" spacing={2} wrap="nowrap">
                         <Grid item><StatusPanel status={botStatus} socketStatus={socketStatus} /></Grid>
                         <Grid item><CurrentTradePanel trade={currentTrade} onManualExit={handleManualExit} /></Grid>
-                        {/* --- CHANGE: Pass the isBotRunning state down as a prop --- */}
-                        <Grid item><ParametersPanel isMock={MOCK_MODE} isBotRunning={isBotRunning} /></Grid>
+                        <Grid item><ParametersPanel isMock={MOCK_MODE} /></Grid>
                         <Grid item><IntelligencePanel /></Grid>
                         <Grid item><PerformancePanel data={dailyPerformance} /></Grid>
                     </Grid>
                     <Grid item xs={12} md={8} sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                         <Box><IndexChart data={chartData} /></Box>
                         <Box><OptionChain data={optionChain} indexPrice={botStatus.indexPrice} /></Box>
-                        <Box sx={{ flexGrow: 1, minHeight: 0 }}><LogTabs debugLogs={debugLogs} tradeHistory={tradeHistory} /></Box>
+                        <Box sx={{ flexGrow: 1, minHeight: 0 }}><LogTabs debugLogs={debugLogs}/></Box>
                     </Grid>
                 </Grid>
             </Box>

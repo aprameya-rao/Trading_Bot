@@ -1,90 +1,72 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Paper, Typography, Box, Grid, CircularProgress, Table, TableBody, TableCell, TableContainer, TableHead, TableRow } from '@mui/material';
 import { createChart, ColorType } from 'lightweight-charts';
+import { getTradeHistory, getTradeHistoryAll } from '../services/api'; // Use our API service
 
-// Chart utility
+// A small, reusable chart component for the equity curve
 const ChartComponent = ({ data }) => {
     const chartContainerRef = useRef();
-    const chartRef = useRef();
 
     useEffect(() => {
-        if (!chartContainerRef.current) return;
+        if (!chartContainerRef.current || data.length < 2) return;
 
-        chartRef.current = createChart(chartContainerRef.current, {
+        const chart = createChart(chartContainerRef.current, {
             width: chartContainerRef.current.clientWidth,
             height: 200,
             layout: { textColor: '#333', background: { type: ColorType.Solid, color: 'white' } },
             grid: { vertLines: { color: '#f0f0f0' }, horzLines: { color: '#f0f0f0' } },
+            timeScale: { timeVisible: true, secondsVisible: false },
         });
 
-        const areaSeries = chartRef.current.addAreaSeries({
-            lineColor: '#2962FF',
-            topColor: 'rgba(41, 98, 255, 0.4)',
-            bottomColor: 'rgba(41, 98, 255, 0)',
+        const areaSeries = chart.addAreaSeries({
+            lineColor: '#2962FF', topColor: 'rgba(41, 98, 255, 0.4)', bottomColor: 'rgba(41, 98, 255, 0)',
         });
         areaSeries.setData(data);
-        chartRef.current.timeScale().fitContent();
+        chart.timeScale().fitContent();
         
-        const handleResize = () => chartRef.current.resize(chartContainerRef.current.clientWidth, 200);
+        const handleResize = () => chart.resize(chartContainerRef.current.clientWidth, 200);
         window.addEventListener('resize', handleResize);
 
         return () => {
             window.removeEventListener('resize', handleResize);
-            chartRef.current.remove();
+            chart.remove();
         };
     }, [data]);
 
-    return <div ref={chartContainerRef} />;
+    return <div ref={chartContainerRef} style={{ width: '100%', height: '200px' }} />;
 };
 
-
-export default function AnalyticsPanel() {
+// The main reusable AnalyticsPanel component
+export default function AnalyticsPanel({ scope = 'all' }) {
     const [stats, setStats] = useState(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
 
     useEffect(() => {
         const fetchAndCalculateStats = async () => {
+            setLoading(true);
             try {
-                const response = await fetch('http://localhost:8000/api/trade_history_all');
-                if (!response.ok) throw new Error('Failed to fetch trade history');
-                
-                const trades = await response.json();
+                // CHANGED: Select the API call based on the 'scope' prop
+                const fetcher = scope === 'today' ? getTradeHistory : getTradeHistoryAll;
+                const trades = await fetcher();
+
                 if (trades.length === 0) {
                     setStats({ trades: [], summary: {}, equityCurve: [] });
                     return;
                 }
 
-                let totalPnl = 0;
-                let grossProfit = 0;
-                let grossLoss = 0;
-                let winningTrades = 0;
-                let losingTrades = 0;
-                let peakEquity = 0;
-                let maxDrawdown = 0;
+                // --- All calculations remain the same ---
+                let totalPnl = 0, grossProfit = 0, grossLoss = 0, winningTrades = 0, losingTrades = 0, peakEquity = 0, maxDrawdown = 0;
                 const equityCurve = [];
 
-                trades.forEach((trade, index) => {
+                trades.forEach((trade) => {
                     totalPnl += trade.pnl;
-                    if (trade.pnl > 0) {
-                        grossProfit += trade.pnl;
-                        winningTrades++;
-                    } else {
-                        grossLoss += Math.abs(trade.pnl);
-                        losingTrades++;
-                    }
-                    
-                    const tradeDate = new Date(trade.timestamp);
-                    const unixTime = Math.floor(tradeDate.getTime() / 1000);
+                    if (trade.pnl > 0) { winningTrades++; grossProfit += trade.pnl; } else { losingTrades++; grossLoss += Math.abs(trade.pnl); }
+                    const unixTime = Math.floor(new Date(trade.timestamp).getTime() / 1000);
                     equityCurve.push({ time: unixTime, value: totalPnl });
-                    
-                    if (totalPnl > peakEquity) {
-                        peakEquity = totalPnl;
-                    }
+                    if (totalPnl > peakEquity) peakEquity = totalPnl;
                     const drawdown = peakEquity - totalPnl;
-                    if (drawdown > maxDrawdown) {
-                        maxDrawdown = drawdown;
-                    }
+                    if (drawdown > maxDrawdown) maxDrawdown = drawdown;
                 });
 
                 const totalTrades = trades.length;
@@ -92,16 +74,8 @@ export default function AnalyticsPanel() {
                 const profitFactor = grossLoss > 0 ? grossProfit / grossLoss : Infinity;
 
                 setStats({
-                    trades,
-                    equityCurve,
-                    summary: {
-                        totalPnl,
-                        profitFactor,
-                        totalTrades,
-                        winRate,
-                        maxDrawdown,
-                        avgTrade: totalTrades > 0 ? totalPnl / totalTrades : 0,
-                    },
+                    trades, equityCurve,
+                    summary: { totalPnl, profitFactor, totalTrades, winRate, maxDrawdown, avgTrade: totalTrades > 0 ? totalPnl / totalTrades : 0 },
                 });
 
             } catch (err) {
@@ -112,11 +86,11 @@ export default function AnalyticsPanel() {
         };
 
         fetchAndCalculateStats();
-    }, []);
+    }, [scope]); // Re-run effect if the scope changes
 
     if (loading) return <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}><CircularProgress /></Box>;
     if (error) return <Typography color="error" sx={{ p: 2 }}>Error: {error}</Typography>;
-    if (!stats || stats.trades.length === 0) return <Typography sx={{ p: 2 }}>No trade history found in the database.</Typography>;
+    if (!stats || stats.trades.length === 0) return <Typography sx={{ p: 2 }}>No trade data found for this period.</Typography>;
 
     const { summary, trades, equityCurve } = stats;
 
@@ -138,37 +112,28 @@ export default function AnalyticsPanel() {
                 <StatBox title="Win Rate" value={`${summary.winRate.toFixed(1)}%`} />
                 <StatBox title="Max Drawdown" value={`₹${summary.maxDrawdown.toFixed(2)}`} />
             </Grid>
-
             <Paper sx={{ p: 2, mb: 2 }}>
                 <Typography variant="body2" sx={{ mb: 1 }}>Equity Curve</Typography>
-                {equityCurve.length > 1 && <ChartComponent data={equityCurve} />}
+                <ChartComponent data={equityCurve} />
             </Paper>
-
-            <TableContainer component={Paper}>
+            <TableContainer component={Paper} sx={{ maxHeight: 350 }}>
                  <Table stickyHeader size="small">
                     <TableHead>
                         <TableRow>
-                            <TableCell>Timestamp</TableCell>
-                            <TableCell>Symbol</TableCell>
-                            <TableCell>Qty</TableCell>
-                            <TableCell>Trigger</TableCell>
-                            <TableCell align="right">Entry</TableCell>
-                            <TableCell align="right">Exit</TableCell>
-                            <TableCell align="right">P&L</TableCell>
+                            <TableCell>Timestamp</TableCell><TableCell>Symbol</TableCell><TableCell>Qty</TableCell>
+                            <TableCell>Trigger</TableCell><TableCell align="right">Entry</TableCell>
+                            <TableCell align="right">Exit</TableCell><TableCell align="right">P&L</TableCell>
                         </TableRow>
                     </TableHead>
                     <TableBody>
-                        {trades.map((trade) => (
+                        {[...trades].reverse().map((trade) => (
                             <TableRow key={trade.id}>
                                 <TableCell>{new Date(trade.timestamp).toLocaleString()}</TableCell>
-                                <TableCell>{trade.symbol}</TableCell>
-                                <TableCell>{trade.quantity}</TableCell>
+                                <TableCell>{trade.symbol}</TableCell><TableCell>{trade.quantity}</TableCell>
                                 <TableCell>{trade.trigger_reason}</TableCell>
                                 <TableCell align="right">{trade.entry_price.toFixed(2)}</TableCell>
                                 <TableCell align="right">{trade.exit_price.toFixed(2)}</TableCell>
-                                <TableCell align="right" sx={{ color: trade.pnl > 0 ? 'success.main' : 'error.main' }}>
-                                    {trade.pnl.toFixed(2)}
-                                </TableCell>
+                                <TableCell align="right" sx={{ color: trade.pnl > 0 ? 'success.main' : 'error.main' }}>{trade.pnl.toFixed(2)}</TableCell>
                             </TableRow>
                         ))}
                     </TableBody>
