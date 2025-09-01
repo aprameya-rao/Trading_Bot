@@ -29,6 +29,15 @@ class KiteTickerManager:
     def on_ticks(self, ws, ticks):
         if self.strategy:
             asyncio.run_coroutine_threadsafe(self.strategy.handle_ticks_async(ticks), self.main_loop)
+    def subscribe(self, tokens):
+        """
+        Subscribes to an additional list of instrument tokens without
+        unsubscribing from the existing ones.
+        """
+        if self.is_connected and self.kws:
+            print(f"Subscribing to {len(tokens)} additional tokens.")
+            self.kws.subscribe(tokens)
+            self.kws.set_mode(self.kws.MODE_LTP, tokens)
 
     def on_connect(self, ws, response):
         print(">>> KITE TICKER MANAGER: 'on_connect' callback triggered.")

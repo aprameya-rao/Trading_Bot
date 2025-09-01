@@ -3,7 +3,7 @@
 // This function now simply creates and returns a configured socket instance.
 // The management of this instance will be handled by the React component.
 export const createSocketConnection = (onOpen, onMessage, onClose, onError) => {
-    const socket = new WebSocket(`ws://localhost:8000/ws`);
+    const socket = new WebSocket(`${import.meta.env.VITE_API_WS_URL}/ws`);
 
     socket.onopen = (event) => {
         console.log("WebSocket connected");

@@ -1,7 +1,7 @@
 import asyncio
 import json
 import pandas as pd
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, time
 from typing import TYPE_CHECKING, Optional
 import math
 
@@ -12,8 +12,11 @@ from .risk_manager import RiskManager
 from .trade_logger import TradeLogger
 from .order_manager import OrderManager
 from .entry_strategies import (
-    UoaEntryStrategy, MaCrossoverAnticipationStrategy, TrendContinuationStrategy,
-    CandlestickEntryStrategy, RsiImmediateEntryStrategy
+    IntraCandlePatternStrategy,
+    UoaEntryStrategy,
+    TrendContinuationStrategy,
+    RsiImmediateEntryStrategy,
+    MaCrossoverAnticipationStrategy
 )
 
 if TYPE_CHECKING:
@@ -27,7 +30,7 @@ INDEX_CONFIG = {
 }
 
 MARKET_STANDARD_PARAMS = {
-    "strategy_priority": ["UOA", "MA_CROSSOVER", "TREND_CONTINUATION", "CANDLESTICK", "RSI"],
+    "strategy_priority": ["UOA", "MA_CROSSOVER", "TREND_CONTINUATION", "COMPREHENSIVE_CANDLESTICK", "RSI"],
     'wma_period': 9, 'sma_period': 9, 'rsi_period': 9, 'rsi_signal_period': 3,
     'rsi_angle_lookback': 2, 'rsi_angle_threshold': 15.0, 'atr_period': 14,
     'min_atr_value': 4, 'ma_gap_threshold_pct': 0.05
@@ -58,13 +61,15 @@ class Strategy:
 
         # --- Dynamically build entry strategies based on config ---
         strategy_map = {
-            "UOA": UoaEntryStrategy, "MA_CROSSOVER": MaCrossoverAnticipationStrategy,
-            "TREND_CONTINUATION": TrendContinuationStrategy, "CANDLESTICK": CandlestickEntryStrategy,
-            "RSI": RsiImmediateEntryStrategy
+            "INTRA_CANDLE": IntraCandlePatternStrategy,
+            "UOA": UoaEntryStrategy,
+            "TREND_CONTINUATION": TrendContinuationStrategy,
+            "RSI": RsiImmediateEntryStrategy,
+            "MA_CROSSOVER": MaCrossoverAnticipationStrategy
         }
         self.entry_strategies = []
         # Use a default priority list if the key is missing in params
-        default_priority = ["UOA", "MA_CROSSOVER", "TREND_CONTINUATION", "CANDLESTICK", "RSI"]
+        default_priority = ["UOA", "MA_CROSSOVER", "TREND_CONTINUATION", "COMPREHENSIVE_CANDLESTICK", "RSI"]
         priority_list = self.STRATEGY_PARAMS.get("strategy_priority", default_priority)
         for name in priority_list:
             if name in strategy_map:
@@ -74,46 +79,82 @@ class Strategy:
         self.option_instruments = self.load_instruments()
         self.last_used_expiry = self.get_weekly_expiry()
 
+    async def reload_params(self):
+        """Reloads strategy parameters from the JSON file and updates dependent components."""
+        await self._log_debug("System", "Live reloading of strategy parameters requested...")
+        new_params = self.STRATEGY_PARAMS
+        self.data_manager.strategy_params = new_params
+        await self._log_debug("System", "Strategy parameters have been reloaded successfully.")
+        return new_params
+
     async def run(self):
         await self._log_debug("System", "Strategy instance created.")
         await self.data_manager.bootstrap_data()
+        self.exit_cooldown_until = datetime.now() + timedelta(seconds=5)
+        await self._log_debug("System", "Initial 5-second startup wait initiated. No trades will be taken.")
         if not self.ui_update_task or self.ui_update_task.done():
             self.ui_update_task = asyncio.create_task(self.periodic_ui_updater())
     
     async def periodic_ui_updater(self):
+        """
+        This background task runs every second to update the UI and perform
+        critical time-based and connection-based safety checks.
+        """
         while True:
             try:
-                # Failsafe logic for ticker disconnection
+                # --- Check 1: Failsafe for Kite Ticker Disconnection ---
                 if self.position and (not self.ticker_manager or not self.ticker_manager.is_connected):
                     if self.disconnected_since is None:
                         self.disconnected_since = datetime.now()
                         await self._log_debug("CRITICAL", "Ticker disconnected in trade! Starting 15s failsafe timer.")
-                    
+
                     if datetime.now() - self.disconnected_since > timedelta(seconds=15):
                         await self._log_debug("CRITICAL", "Failsafe triggered! Exiting position due to prolonged disconnection.")
                         await self.exit_position("Failsafe: Ticker Disconnected")
-                
+                        continue # Skip the rest of this loop iteration
+                        
                 elif self.ticker_manager and self.ticker_manager.is_connected:
+                    # Reset the disconnection timer if connection is restored
                     if self.disconnected_since is not None:
                         await self._log_debug("INFO", "Ticker reconnected, failsafe timer cancelled.")
                         self.disconnected_since = None
-                    
-                    # Original UI update logic
+
+                    # --- BEGIN NEW LOGIC: End-of-Day (EOD) Exit ---
+                    # Check if the current time is past the safe cut-off time for MIS trades
+                    EOD_SQUARE_OFF_TIME = time(15, 15) # 3:15 PM IST
+
+                    if self.position and datetime.now().time() >= EOD_SQUARE_OFF_TIME:
+                        await self._log_debug("RISK", f"EOD square-off time ({EOD_SQUARE_OFF_TIME.strftime('%H:%M')}) reached. Exiting position.")
+                        await self.exit_position("End of Day Auto-Square Off")
+                        continue # Skip the rest of this loop iteration
+                    # --- END NEW LOGIC ---
+
+                    # If all checks pass, update the UI normally
                     await self._update_ui_status()
                     await self._update_ui_option_chain()
                     await self._update_ui_chart_data()
 
                 await asyncio.sleep(1)
-            except asyncio.CancelledError: await self._log_debug("UI Updater", "Task cancelled."); break
-            except Exception as e: await self._log_debug("UI Updater Error", f"An error occurred: {e}"); await asyncio.sleep(5)
+
+            except asyncio.CancelledError: 
+                await self._log_debug("UI Updater", "Task cancelled.")
+                break
+            except Exception as e: 
+                await self._log_debug("UI Updater Error", f"An error occurred: {e}")
+                await asyncio.sleep(5) # Wait a bit longer after an error
 
     async def take_trade(self, trigger, opt):
         async with self.position_lock:
             if self.position or not opt: return
-            
+        
+            instrument_token = opt.get("instrument_token")
+        
             symbol, side, price, lot_size = opt["tradingsymbol"], opt["instrument_type"], self.data_manager.prices.get(opt["tradingsymbol"]), opt.get("lot_size")
             qty, initial_sl_price = self.risk_manager.calculate_trade_details(price, lot_size)
-            if qty is None: return
+
+            if qty is None or instrument_token is None: 
+                await self._log_debug("Trade Rejected", "Could not calculate quantity or find instrument token.")
+                return
 
             try:
                 if self.params.get("trading_mode") == "Live Trading":
@@ -121,12 +162,18 @@ class Strategy:
                         transaction_type=kite.TRANSACTION_TYPE_BUY,
                         tradingsymbol=symbol, exchange=self.exchange, quantity=qty
                     )
-                    await self._log_debug("LIVE TRADE", f"Confirmed BUY for {qty} {symbol}.")
+                    await self._log_debug("LIVE TRADE", f"Confirmed BUY for {symbol}. Qty: {qty} @ Price: {price:.2f}.Reason: {trigger}")
                 else:
-                    await self._log_debug("PAPER TRADE", f"Simulating BUY order for {qty} {symbol}.")
+                    await self._log_debug("PAPER TRADE", f"Simulating BUY order for {symbol}. Qty: {qty} @ Price: {price:.2f}.Reason: {trigger}")
 
                 self.position = {"symbol": symbol, "entry_price": price, "direction": side, "qty": qty, "trail_sl": round(initial_sl_price, 2), "max_price": price, "trigger_reason": trigger, "entry_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "lot_size": lot_size}
-                self.trades_this_minute += 1; self.performance_stats["total_trades"] += 1
+
+                if self.ticker_manager:
+                    await self._log_debug("WebSocket", f"Subscribing to active trade token: {instrument_token}")
+                    self.ticker_manager.subscribe([instrument_token])
+
+                self.trades_this_minute += 1
+                self.performance_stats["total_trades"] += 1
                 self.next_partial_profit_level = 1
                 _play_sound(self.manager, "entry")
                 await self._update_ui_trade_status()
@@ -136,55 +183,68 @@ class Strategy:
                 _play_sound(self.manager, "loss")
 
     async def exit_position(self, reason):
-        async with self.position_lock:
-            if not self.position: return
-            p = self.position
-            # Use last known price for exit, as LTP might not be available during disconnection
-            exit_price = self.data_manager.prices.get(p["symbol"], p["max_price"])
+        if not self.position: return
+        p = self.position
+        exit_price = self.data_manager.prices.get(p["symbol"], p["max_price"])
+    
+        sell_log_message = f"Simulating SELL order for {p['symbol']}. Reason: {reason}. Qty: {p['qty']} @ Price: {exit_price:.2f}"
+        if self.params.get("trading_mode") == "Live Trading":
+            await self._log_debug("LIVE TRADE", sell_log_message)
+        else:
+            await self._log_debug("PAPER TRADE", sell_log_message)
+    
+        try:
+            if self.params.get("trading_mode") == "Live Trading":
+                await self.order_manager.execute_order(
+                    transaction_type=kite.TRANSACTION_TYPE_SELL,
+                    tradingsymbol=p["symbol"], exchange=self.exchange, quantity=p["qty"]
+                )
+
+            net_pnl = (exit_price - p["entry_price"]) * p["qty"]
+            self.daily_pnl += net_pnl
+            if net_pnl > 0: self.performance_stats["winning_trades"] += 1; self.daily_profit += net_pnl; _play_sound(self.manager, "profit")
+            else: self.performance_stats["losing_trades"] += 1; self.daily_loss += net_pnl; _play_sound(self.manager, "loss")
+
+            log_info = { "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "trigger_reason": p["trigger_reason"], "symbol": p["symbol"], "quantity": p["qty"], "pnl": round(net_pnl, 2), "entry_price": p["entry_price"], "exit_price": exit_price, "exit_reason": reason, "trend_state": self.data_manager.trend_state, "atr": round(self.data_manager.data_df.iloc[-1]["atr"], 2) if not self.data_manager.data_df.empty else 0 }
+            await self.trade_logger.log_trade(log_info)
+
+            await self._log_debug("Database", f"Trade for {p['symbol']} logged successfully.")
+            await self.manager.broadcast({"type": "new_trade_log", "payload": log_info})
+
+            self.position = None
             
-            try:
-                if self.params.get("trading_mode") == "Live Trading":
-                    await self.order_manager.execute_order(
-                        transaction_type=kite.TRANSACTION_TYPE_SELL,
-                        tradingsymbol=p["symbol"], exchange=self.exchange, quantity=p["qty"]
-                    )
-                # Log both paper and live trades after simulated/confirmed execution
-                net_pnl = (exit_price - p["entry_price"]) * p["qty"]
-                self.daily_pnl += net_pnl
-                if net_pnl > 0: self.performance_stats["winning_trades"] += 1; self.daily_profit += net_pnl; _play_sound(self.manager, "profit")
-                else: self.performance_stats["losing_trades"] += 1; self.daily_loss += net_pnl; _play_sound(self.manager, "loss")
+            self.exit_cooldown_until = datetime.now() + timedelta(seconds=5)
+            await self._log_debug("System", "Exit cooldown initiated for 5 seconds.")
 
-                log_info = { "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "trigger_reason": p["trigger_reason"], "symbol": p["symbol"], "quantity": p["qty"], "pnl": round(net_pnl, 2), "entry_price": p["entry_price"], "exit_price": exit_price, "exit_reason": reason, "trend_state": self.data_manager.trend_state, "atr": round(self.data_manager.data_df.iloc[-1]["atr"], 2) if not self.data_manager.data_df.empty else 0 }
-                await self.trade_logger.log_trade(log_info)
+            await self._update_ui_trade_status()
+            await self._update_ui_performance()
 
-                self.position = None # Nullify position only after successful exit and logging
-                self.exit_cooldown_until = datetime.now() + timedelta(seconds=5)
-                await self._update_ui_trade_status(); await self._update_ui_performance()
-
-            except Exception as e:
-                await self._log_debug("CRITICAL-EXIT-FAIL", f"FAILED TO EXIT {p['symbol']}! MANUAL INTERVENTION REQUIRED! Error: {e}")
-                _play_sound(self.manager, "warning")
+        except Exception as e:
+            await self._log_debug("CRITICAL-EXIT-FAIL", f"FAILED TO EXIT {p['symbol']}! MANUAL INTERVENTION REQUIRED! Error: {e}")
+            _play_sound(self.manager, "warning")
 
     async def evaluate_exit_logic(self):
+        """
+        Checks the current position against exit criteria.
+        Returns True if an exit should be triggered, otherwise False.
+        """
         async with self.position_lock:
-            if not self.position: return
+            if not self.position: return False
             p, ltp = self.position, self.data_manager.prices.get(self.position["symbol"])
-            if ltp is None: return
+            if ltp is None: return False
 
-            partial_profit_pct = self.params.get("partial_profit_pct", 0)
-            if partial_profit_pct > 0:
-                profit_pct = (((ltp - p["entry_price"]) / p["entry_price"]) * 100 if p["entry_price"] > 0 else 0)
-                if profit_pct >= (partial_profit_pct * self.next_partial_profit_level):
-                    await self.partial_exit_position()
-                    return 
-            
+            # Trailing stop-loss calculation
             if ltp > p["max_price"]: p["max_price"] = ltp
             sl_points = float(self.params["trailing_sl_points"])
             sl_percent = float(self.params["trailing_sl_percent"])
             p["trail_sl"] = round(max(p["trail_sl"], max(p["max_price"] - sl_points, p["max_price"] * (1 - sl_percent / 100))), 2)
 
             await self._update_ui_trade_status()
-            if ltp <= p["trail_sl"]: await self.exit_position("Trailing SL")
+
+            if ltp <= p["trail_sl"]: 
+                return True # Signal that an exit is required
+
+            return False # No exit required
 
     async def partial_exit_position(self):
         if not self.position: return
@@ -193,7 +253,9 @@ class Strategy:
         if lot_size <= 0: lot_size = 1
         qty_to_exit = int(min(math.ceil((p["qty"] / lot_size) * (partial_exit_pct / 100)) * lot_size, p["qty"]))
         if qty_to_exit <= 0: return
-        if (p["qty"] - qty_to_exit) < lot_size: await self.exit_position(f"Final Partial Profit-Take"); return
+        if (p["qty"] - qty_to_exit) < lot_size: 
+            await self.exit_position(f"Final Partial Profit-Take")
+            return
 
         exit_price = self.data_manager.prices.get(p["symbol"], p["entry_price"])
         try:
@@ -210,19 +272,33 @@ class Strategy:
             reason = f"Partial Profit-Take ({self.next_partial_profit_level})"
             log_info = { "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "trigger_reason": p["trigger_reason"], "symbol": p["symbol"], "quantity": qty_to_exit, "pnl": round(net_pnl, 2), "entry_price": p["entry_price"], "exit_price": exit_price, "exit_reason": reason, "trend_state": self.data_manager.trend_state, "atr": round(self.data_manager.data_df.iloc[-1]["atr"], 2) if not self.data_manager.data_df.empty else 0 }
             await self.trade_logger.log_trade(log_info)
+            await self.manager.broadcast({"type": "new_trade_log", "payload": log_info})
 
             p["qty"] -= qty_to_exit
             self.next_partial_profit_level += 1
             await self._log_debug("Profit.Take", f"Remaining quantity: {p['qty']}.")
-            await self._update_ui_trade_status(); await self._update_ui_performance()
+            await self._update_ui_trade_status()
+            await self._update_ui_performance()
         except Exception as e:
             await self._log_debug("CRITICAL-PARTIAL-EXIT-FAIL", f"Failed to partially exit {p['symbol']}: {e}")
             _play_sound(self.manager, "warning")
 
-    # The rest of the file continues with all helper, UI, and callback methods
-    # ... (Code from previous answers for handle_ticks_async, check_trade_entry, UI updaters, etc.)
-    # The following is a condensed version of the remaining unchanged methods for completeness.
-    
+    # --- NEW FUNCTION TO HANDLE PARTIAL PROFIT ---
+    async def check_partial_profit_take(self):
+        """Checks if the partial profit target is met and calls the exit function."""
+        if not self.position: return
+        p, ltp = self.position, self.data_manager.prices.get(self.position["symbol"])
+        if ltp is None: return
+
+        partial_profit_pct = self.params.get("partial_profit_pct", 0)
+        if partial_profit_pct <= 0: return
+
+        profit_pct = (((ltp - p["entry_price"]) / p["entry_price"]) * 100 if p["entry_price"] > 0 else 0)
+        target_pct = partial_profit_pct * self.next_partial_profit_level
+
+        if profit_pct >= target_pct:
+            await self.partial_exit_position()
+
     def _reset_state(self):
         self.position, self.daily_pnl, self.daily_profit, self.daily_loss, self.daily_trade_limit_hit = None, 0, 0, 0, False
         self.trades_this_minute, self.initial_subscription_done = 0, False
@@ -237,20 +313,38 @@ class Strategy:
             if not self.initial_subscription_done and any(t.get("instrument_token") == self.index_token for t in ticks):
                 self.data_manager.prices[self.index_symbol] = next(t["last_price"] for t in ticks if t.get("instrument_token") == self.index_token)
                 await self._log_debug("WebSocket", "Index price received. Subscribing to full token list.")
-                tokens = self.get_all_option_tokens(); await self.map_option_tokens(tokens)
-                if self.ticker_manager: self.ticker_manager.resubscribe(tokens)
+                tokens = self.get_all_option_tokens()
+                await self.map_option_tokens(tokens)
+                if self.ticker_manager:
+                    self.ticker_manager.resubscribe(tokens)
                 self.initial_subscription_done = True
+
             for tick in ticks:
                 token, ltp = tick.get("instrument_token"), tick.get("last_price")
                 if token is not None and ltp is not None and (symbol := self.token_to_symbol.get(token)):
                     self.data_manager.prices[symbol] = ltp
                     self.data_manager.update_price_history(symbol, ltp)
                     is_new_minute = self.data_manager.update_live_candle(ltp, symbol)
+
                     if symbol == self.index_symbol:
-                        if is_new_minute: self.trades_this_minute = 0; await self.data_manager.on_new_minute()
+                        if is_new_minute: 
+                            self.trades_this_minute = 0
+                            await self.data_manager.on_new_minute(ltp)
                         await self.check_trade_entry()
-                    if self.position and self.position["symbol"] == symbol: await self.evaluate_exit_logic()
-        except Exception as e: await self._log_debug("Tick Handler Error", f"Critical error: {e}")
+                    
+                    # --- MODIFIED EXIT LOGIC BLOCK ---
+                    if self.position and self.position["symbol"] == symbol:
+                        # 1. First, check if we should take partial profit.
+                        await self.check_partial_profit_take()
+
+                        # 2. Then, check if we should exit completely due to the trailing SL.
+                        # The check for self.position is implicitly handled again inside evaluate_exit_logic
+                        should_exit = await self.evaluate_exit_logic()
+                        if should_exit:
+                            await self.exit_position("Trailing SL")
+
+        except Exception as e: 
+            await self._log_debug("Tick Handler Error", f"Critical error: {e}")
 
     async def check_trade_entry(self):
         if self.position is not None or self.daily_trade_limit_hit: return

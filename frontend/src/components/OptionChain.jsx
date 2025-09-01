@@ -1,13 +1,19 @@
 import React from 'react';
 import { Paper, Typography, TableContainer, Table, TableHead, TableBody, TableRow, TableCell } from '@mui/material';
+import { useStore } from '../store/store'; // --- ADDED: Import useStore
 
-export default function OptionChain({ data, indexPrice }) {
+// --- CHANGED: Removed `indexPrice` from props definition ---
+export default function OptionChain({ data }) {
+    // --- ADDED: Subscribe to the specific piece of state needed ---
+    const indexPrice = useStore(state => state.botStatus.indexPrice);
+
     const getRowStyle = (strike) => {
         const diff = Math.abs(strike - indexPrice);
         if (diff < 100) return { backgroundColor: 'rgba(255, 255, 0, 0.1)' }; // ATM
         return {};
     };
     
+    // The JSX return block remains the same
     return (
         <Paper elevation={3} sx={{ p: 2 }}>
             <Typography variant="body2" sx={{ mb: 1 }}>Option Chain</Typography>

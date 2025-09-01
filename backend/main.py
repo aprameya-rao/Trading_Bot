@@ -1,13 +1,13 @@
 import asyncio
 import json
 import pandas as pd
-import sqlite3 # <-- FIX: Added missing import
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
 from datetime import datetime
+import os
 
 from core.kite import kite, generate_session_and_set_token, access_token
 from core.websocket_manager import manager
@@ -15,6 +15,8 @@ from core.strategy import MARKET_STANDARD_PARAMS
 from core.optimiser import OptimizerBot
 from core.trade_logger import TradeLogger
 from core.bot_service import TradingBotService, get_bot_service
+from core.database import today_engine, all_engine # Using new database module
+
 
 # --- Lifespan Event Handler ---
 @asynccontextmanager
@@ -30,9 +32,16 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
+DEFAULT_ORIGINS = "http://localhost:5173,http://localhost:3000"
+
+origins_str = os.getenv("ALLOWED_ORIGINS", DEFAULT_ORIGINS)
+
+allowed_origins_list = origins_str.split(",")
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=allowed_origins_list,  # Use the dynamic list here
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -59,32 +68,35 @@ async def authenticate(token_request: TokenRequest):
 
 @app.get("/api/trade_history")
 async def get_trade_history():
-    try:
-        # --- FIX: Establish a proper DB connection before querying ---
-        conn = sqlite3.connect('trading_data_today.db')
-        df = pd.read_sql_query("SELECT * FROM trades ORDER BY timestamp ASC", conn)
-        conn.close()
-        return df.to_dict('records')
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to fetch today's trade history: {e}")
+    def db_call():
+        try:
+            with today_engine.connect() as conn:
+                df = pd.read_sql_query("SELECT * FROM trades ORDER BY timestamp ASC", conn)
+                return df.to_dict('records')
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to fetch today's trade history: {e}")
+    return await asyncio.to_thread(db_call)
 
 @app.get("/api/trade_history_all")
 async def get_all_trade_history():
-    try:
-        # --- FIX: Establish a proper DB connection before querying ---
-        conn = sqlite3.connect('trading_data_all.db')
-        df = pd.read_sql_query("SELECT * FROM trades ORDER BY timestamp ASC", conn)
-        conn.close()
-        return df.to_dict('records')
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to fetch all trade history: {e}")
+    def db_call():
+        try:
+            with all_engine.connect() as conn:
+                df = pd.read_sql_query("SELECT * FROM trades ORDER BY timestamp ASC", conn)
+                return df.to_dict('records')
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to fetch all trade history: {e}")
+    return await asyncio.to_thread(db_call)
 
 @app.post("/api/optimize")
-async def run_optimizer():
+async def run_optimizer(service: TradingBotService = Depends(get_bot_service)):
     optimizer = OptimizerBot()
     new_params, justifications = await optimizer.find_optimal_parameters()
     if new_params:
         optimizer.update_strategy_file(new_params)
+        if service.strategy_instance:
+            await service.strategy_instance.reload_params()
+            await service.strategy_instance._log_debug("Optimizer", "Live parameter reload successful.")
         return {"status": "success", "report": justifications}
     return {"status": "error", "report": justifications or ["Optimization failed."]}
 
@@ -115,13 +127,33 @@ async def manual_exit_trade(service: TradingBotService = Depends(get_bot_service
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket, service: TradingBotService = Depends(get_bot_service)):
     await manager.connect(websocket)
+    print("Client connected. Synchronizing state...")
     try:
+        if service.strategy_instance:
+            await service.strategy_instance._update_ui_status()
+            await service.strategy_instance._update_ui_performance()
+            await service.strategy_instance._update_ui_trade_status()
+            print("State synchronization complete.")
+        else:
+             await manager.broadcast({"type": "status_update", "payload": {
+                "connection": "DISCONNECTED", "mode": "NOT STARTED", "is_running": False,
+                "indexPrice": 0, "trend": "---", "indexName": "INDEX"
+            }})
+
         while True:
             data = await websocket.receive_text()
             message = json.loads(data)
+
+            # --- ADDED: Ping/Pong keep-alive logic ---
+            if message.get("type") == "ping":
+                await websocket.send_text('{"type": "pong"}')
+                continue # Skip further processing for ping messages
+            
             if message.get("type") == "add_to_watchlist":
                 payload = message.get("payload", {})
-                await service.add_to_watchlist(payload.get("side"), payload.get("strike"))
+                if service.strategy_instance:
+                    await service.strategy_instance.add_to_watchlist(payload.get("side"), payload.get("strike"))
+    
     except WebSocketDisconnect:
         manager.disconnect()
     except Exception as e:
@@ -129,5 +161,5 @@ async def websocket_endpoint(websocket: WebSocket, service: TradingBotService = 
         manager.disconnect()
 
 if __name__ == "__main__":
+    # For production, use Gunicorn as recommended. This block is for direct development runs.
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
-

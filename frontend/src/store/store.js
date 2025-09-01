@@ -37,14 +37,16 @@ const createRealtimeDataSlice = (set) => ({
     socketStatus: 'DISCONNECTED',
     
     setSocketStatus: (status) => set({ socketStatus: status }),
+    setTradeHistory: (history) => set({ tradeHistory: history }),
     updateBotStatus: (payload) => set({ botStatus: payload }),
     updateDailyPerformance: (payload) => set({ dailyPerformance: payload }),
     updateCurrentTrade: (payload) => set({ currentTrade: payload }),
-    addDebugLog: (payload) => set(state => ({ debugLogs: [payload, ...state.debugLogs] })),
+    addDebugLog: (payload) => set(state => ({ debugLogs: [payload, ...state.debugLogs].slice(0, 500) })),
     updateTradeHistory: (payload) => set({ tradeHistory: payload }),
     updateOptionChain: (payload) => set({ optionChain: payload }),
     updateUoaList: (payload) => set({ uoaList: payload }),
     updateChartData: (payload) => set({ chartData: payload }),
+    addTradeToHistory: (trade) => set(state => ({ tradeHistory: [trade, ...state.tradeHistory] })),
 });
 
 export const useStore = create((...a) => ({

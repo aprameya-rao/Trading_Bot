@@ -10,7 +10,7 @@ import IndexChart from './components/IndexChart';
 import OptionChain from './components/OptionChain';
 import LogTabs from './components/LogTabs';
 import { createSocketConnection } from './services/socket';
-import { manualExit } from './services/api';
+import { manualExit, getTradeHistory } from './services/api'; // ADDED: getTradeHistory
 import { useStore } from './store/store';
 import { useSnackbar } from 'notistack';
 
@@ -33,10 +33,10 @@ function App() {
     const { enqueueSnackbar } = useSnackbar();
     const socketRef = useRef(null);
     const reconnectTimerRef = useRef(null);
+    const pingIntervalRef = useRef(null);
 
-    // --- FIX #1: Select only the state needed for rendering. Actions will be called differently. ---
     const { 
-        botStatus, dailyPerformance, currentTrade, debugLogs, tradeHistory, 
+        botStatus, dailyPerformance, currentTrade, debugLogs, 
         optionChain, chartData, socketStatus
     } = useStore();
 
@@ -48,13 +48,31 @@ function App() {
         }
     }, []);
     
-    // --- FIX #3: The dependency array is now stable and correct. ---
     useEffect(() => {
-        // --- FIX #2: Get actions directly from the store inside the effect. ---
-        // This prevents them from being dependencies and causing the loop.
         const { getState, setState } = useStore;
 
         const connect = () => {
+            // This function now fetches history when the connection opens
+            const handleOpen = async () => {
+                setState({ socketStatus: 'CONNECTED' });
+                
+                // Fetch today's trade history to populate the UI
+                try {
+                    console.log("Fetching today's trade history...");
+                    const history = await getTradeHistory();
+                    getState().setTradeHistory(history); // Load into the store
+                    console.log(`Loaded ${history.length} trades from history.`);
+                } catch (error) {
+                    enqueueSnackbar('Could not load trade history.', { variant: 'error' });
+                }
+                
+                // Start the ping/pong keep-alive timer
+                if (pingIntervalRef.current) clearInterval(pingIntervalRef.current);
+                pingIntervalRef.current = setInterval(() => {
+                    sendSocketMessage({ type: 'ping' });
+                }, 4000); 
+            };
+            
             const handleMessage = (event) => {
                 try {
                     const data = JSON.parse(event.data);
@@ -63,11 +81,12 @@ function App() {
                         case 'daily_performance_update': getState().updateDailyPerformance(data.payload); break;
                         case 'trade_status_update': getState().updateCurrentTrade(data.payload); break;
                         case 'debug_log': getState().addDebugLog(data.payload); break;
-                        case 'trade_log_update': getState().updateTradeHistory(data.payload); break;
+                        case 'new_trade_log': getState().addTradeToHistory(data.payload); break;
                         case 'option_chain_update': getState().updateOptionChain(data.payload); break;
                         case 'uoa_list_update': getState().updateUoaList(data.payload); break;
                         case 'chart_data_update': getState().updateChartData(data.payload); break;
                         case 'play_sound': if (sounds[data.payload]) sounds[data.payload].play(); break;
+                        case 'pong': break;
                     }
                 } catch (error) {
                     console.error("Failed to parse socket message:", event.data, error);
@@ -76,14 +95,16 @@ function App() {
 
             const handleClose = () => {
                 setState({ socketStatus: 'DISCONNECTED' });
+                if (pingIntervalRef.current) clearInterval(pingIntervalRef.current);
                 reconnectTimerRef.current = setTimeout(connect, 5000);
             };
 
             if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+            if (pingIntervalRef.current) clearInterval(pingIntervalRef.current);
             if (socketRef.current) socketRef.current.close();
 
             socketRef.current = createSocketConnection(
-                () => setState({ socketStatus: 'CONNECTED' }), 
+                handleOpen, 
                 handleMessage, 
                 handleClose, 
                 (error) => console.error('Socket error:', error)
@@ -92,11 +113,12 @@ function App() {
 
         if (!MOCK_MODE) connect();
 
-        return () => {
+        return () => { // Cleanup function
             if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+            if (pingIntervalRef.current) clearInterval(pingIntervalRef.current);
             if (socketRef.current) socketRef.current.close();
         };
-    }, [MOCK_MODE]); // The dependency array is now stable.
+    }, [MOCK_MODE, sendSocketMessage, enqueueSnackbar]);
 
     const handleManualExit = async () => {
         if (window.confirm('Are you sure you want to manually exit the current trade?')) {
@@ -123,7 +145,7 @@ function App() {
                     </Grid>
                     <Grid item xs={12} md={8} sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                         <Box><IndexChart data={chartData} /></Box>
-                        <Box><OptionChain data={optionChain} indexPrice={botStatus.indexPrice} /></Box>
+                        <Box><OptionChain data={optionChain} /></Box>
                         <Box sx={{ flexGrow: 1, minHeight: 0 }}><LogTabs debugLogs={debugLogs}/></Box>
                     </Grid>
                 </Grid>

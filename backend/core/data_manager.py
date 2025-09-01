@@ -6,7 +6,7 @@ from typing import Optional
 
 from .kite import kite
 
-# --- Indicator Calculation Functions (moved from strategy.py) ---
+# --- Indicator Calculation Functions ---
 def calculate_wma(series, length=9):
     if length < 1 or len(series) < length: return pd.Series(index=series.index, dtype=float)
     weights = np.arange(1, length + 1)
@@ -38,7 +38,6 @@ class DataManager:
         self.on_trend_update = trend_update_func
 
         self.trend_state: Optional[str] = None
-        self.current_minute: Optional[datetime] = None
         
         # State variables
         self.prices = {}
@@ -89,29 +88,44 @@ class DataManager:
         current_state = "BULLISH" if last["wma"] > last["sma"] else "BEARISH"
         if self.trend_state != current_state:
             self.trend_state = current_state
-            await self.on_trend_update(current_state) # Callback to main strategy
+            await self.on_trend_update(current_state)
             await self.log_debug("Trend", f"Trend is now {self.trend_state}.")
 
-    async def on_new_minute(self):
+    async def on_new_minute(self, new_minute_ltp):
         """Called by the main strategy when a new minute starts."""
+        # First, check if there's a completed candle to save
         if "minute" in self.current_candle:
-            new_row = pd.DataFrame([self.current_candle], index=[self.current_candle["minute"]])
+            # This candle is the one from the previous minute, now complete.
+            candle_to_add = self.current_candle.copy()
+            new_row = pd.DataFrame([candle_to_add], index=[candle_to_add["minute"]])
             self.data_df = pd.concat([self.data_df, new_row]).tail(700)
             self.data_df = self._calculate_indicators(self.data_df)
             await self._update_trend_state()
+
+        # Second, create the new candle for the current minute
+        self.current_candle = {
+            "minute": datetime.now(timezone.utc).replace(second=0, microsecond=0),
+            "open": new_minute_ltp,
+            "high": new_minute_ltp,
+            "low": new_minute_ltp,
+            "close": new_minute_ltp
+        }
 
     def update_live_candle(self, ltp, symbol=None):
         """Updates the current (incomplete) candle for the index or an option."""
         is_index = symbol is None or symbol == self.index_symbol
         candle_dict = self.current_candle if is_index else self.option_candles.setdefault(symbol, {})
         
-        self.current_minute = datetime.now(timezone.utc).replace(second=0, microsecond=0)
-        is_new_minute = candle_dict.get("minute") != self.current_minute
+        current_dt_minute = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+        is_new_minute = candle_dict.get("minute") != current_dt_minute
 
-        if is_new_minute:
-            candle_dict.update({"minute": self.current_minute, "open": ltp, "high": ltp, "low": ltp, "close": ltp})
-        else:
-            candle_dict.update({"high": max(candle_dict.get("high", ltp), ltp), "low": min(candle_dict.get("low", ltp), ltp), "close": ltp})
+        # Only update the H/L/C if it's for the currently forming candle
+        if not is_new_minute and "open" in candle_dict:
+            candle_dict.update({
+                "high": max(candle_dict.get("high", ltp), ltp),
+                "low": min(candle_dict.get("low", ltp), ltp),
+                "close": ltp
+            })
         
         return is_new_minute
 

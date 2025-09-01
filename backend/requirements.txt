@@ -4,6 +4,7 @@ python-dotenv
 kiteconnect
 numpy
 pandas
-simpleaudio
 websockets
 asyncio
+SQLAlchemy
+gunicorn

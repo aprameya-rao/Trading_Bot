@@ -3,7 +3,7 @@
         "UOA",
         "MA_CROSSOVER",
         "TREND_CONTINUATION",
-        "CANDLESTICK",
+        "INTRA_CANDLE",
         "RSI"
     ],
     "wma_period": 9,
