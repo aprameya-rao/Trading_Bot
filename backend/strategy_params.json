@@ -1,4 +1,4 @@
-{   
+{
     "strategy_priority": [
         "UOA",
         "MA_CROSSOVER",
@@ -13,6 +13,6 @@
     "rsi_angle_lookback": 2,
     "rsi_angle_threshold": 18.15,
     "atr_period": 14,
-    "min_atr_value": 4.63,
-    "ma_gap_threshold_pct": 0.0365
+    "min_atr_value": 5.62,
+    "ma_gap_threshold_pct": 0.0239
 }
