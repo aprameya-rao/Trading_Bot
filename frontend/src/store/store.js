@@ -28,7 +28,8 @@ const createParametersSlice = (set) => ({
 const createRealtimeDataSlice = (set) => ({
     chartData: null,
     botStatus: { connection: 'DISCONNECTED', mode: 'NOT STARTED', indexPrice: 0, trend: '---', indexName: 'INDEX', is_running: false },
-    dailyPerformance: { netPnl: 0, grossProfit: 0, grossLoss: 0, wins: 0, losses: 0 },
+    // MODIFIED: Updated dailyPerformance state shape for Net P&L
+    dailyPerformance: { grossPnl: 0, totalCharges: 0, netPnl: 0, wins: 0, losses: 0 },
     currentTrade: null,
     debugLogs: [],
     tradeHistory: [],
@@ -54,4 +55,6 @@ export const useStore = create((...a) => ({
     ...createRealtimeDataSlice(...a),
 }));
 
+// Initialize parameters from localStorage on load
 useStore.getState().loadParams();
+

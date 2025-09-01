@@ -1,10 +1,11 @@
 {
     "strategy_priority": [
         "UOA",
-        "MA_CROSSOVER",
         "TREND_CONTINUATION",
-        "INTRA_CANDLE",
-        "RSI"
+        "MA_CROSSOVER",
+        "CANDLE_PATTERN",
+        "RSI",
+        "INTRA_CANDLE"
     ],
     "wma_period": 9,
     "sma_period": 9,
@@ -13,6 +14,6 @@
     "rsi_angle_lookback": 2,
     "rsi_angle_threshold": 18.15,
     "atr_period": 14,
-    "min_atr_value": 5.62,
+    "min_atr_value": 6.2,
     "ma_gap_threshold_pct": 0.0239
 }

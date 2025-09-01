@@ -1,9 +1,8 @@
 import React, { useEffect, useRef, useMemo } from 'react';
 import { Paper, Typography, Box, Grid, CircularProgress, Table, TableBody, TableCell, TableContainer, TableHead, TableRow } from '@mui/material';
 import { createChart, ColorType } from 'lightweight-charts';
-import { useStore } from '../store/store'; // Use the global store
+import { useStore } from '../store/store';
 
-// This small, reusable chart component for the equity curve remains the same
 const ChartComponent = ({ data }) => {
     const chartContainerRef = useRef();
 
@@ -36,14 +35,10 @@ const ChartComponent = ({ data }) => {
     return <div ref={chartContainerRef} style={{ width: '100%', height: '200px' }} />;
 };
 
-// The main reusable AnalyticsPanel component, now powered by the store
 export default function AnalyticsPanel({ scope = 'all' }) {
-    // Get all trades from the global Zustand store
     const allTrades = useStore(state => state.tradeHistory);
     
-    // useMemo will re-run the calculations only when the trade history changes
     const stats = useMemo(() => {
-        // Filter trades based on the 'scope' prop ('today' or 'all')
         const trades = scope === 'today' 
             ? allTrades.filter(t => new Date(t.timestamp).toDateString() === new Date().toDateString())
             : allTrades;
@@ -52,33 +47,39 @@ export default function AnalyticsPanel({ scope = 'all' }) {
             return null;
         }
 
-        let totalPnl = 0, grossProfit = 0, grossLoss = 0, winningTrades = 0, losingTrades = 0, peakEquity = 0, maxDrawdown = 0;
+        // --- MODIFIED: Replaced drawdown variables with maxLoss ---
+        let totalPnl = 0, grossProfit = 0, grossLoss = 0, winningTrades = 0, losingTrades = 0, maxLoss = 0;
         const equityCurve = [];
 
-        // Sort trades by timestamp to calculate equity curve correctly
         const sortedTrades = [...trades].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
 
         sortedTrades.forEach((trade) => {
             totalPnl += trade.pnl;
-            if (trade.pnl > 0) { winningTrades++; grossProfit += trade.pnl; } else { losingTrades++; grossLoss += Math.abs(trade.pnl); }
+            if (trade.pnl > 0) { 
+                winningTrades++; 
+                grossProfit += trade.pnl; 
+            } else { 
+                losingTrades++; 
+                grossLoss += Math.abs(trade.pnl);
+                // --- ADDED: Track the single biggest losing trade ---
+                maxLoss = Math.max(maxLoss, Math.abs(trade.pnl));
+            }
+            
             const unixTime = Math.floor(new Date(trade.timestamp).getTime() / 1000);
             equityCurve.push({ time: unixTime, value: totalPnl });
-            if (totalPnl > peakEquity) peakEquity = totalPnl;
-            const drawdown = peakEquity - totalPnl;
-            if (drawdown > maxDrawdown) maxDrawdown = drawdown;
         });
 
         const totalTrades = trades.length;
         const winRate = totalTrades > 0 ? (winningTrades / totalTrades) * 100 : 0;
         const profitFactor = grossLoss > 0 ? grossProfit / grossLoss : Infinity;
 
+        // --- MODIFIED: Changed the returned summary object ---
         return {
             trades, equityCurve,
-            summary: { totalPnl, profitFactor, totalTrades, winRate, maxDrawdown, avgTrade: totalTrades > 0 ? totalPnl / totalTrades : 0 },
+            summary: { totalPnl, profitFactor, totalTrades, winRate, maxLoss, avgTrade: totalTrades > 0 ? totalPnl / totalTrades : 0 },
         };
     }, [allTrades, scope]);
 
-    // Conditional rendering for different states
     if (!stats) return <Typography sx={{ p: 2 }}>No trade data found for this period.</Typography>;
 
     const { summary, trades, equityCurve } = stats;
@@ -92,7 +93,6 @@ export default function AnalyticsPanel({ scope = 'all' }) {
         </Grid>
     );
 
-    // --- COMPLETE JSX RETURN BLOCK ---
     return (
         <Box>
             <Grid container spacing={2} sx={{ mb: 2 }}>
@@ -100,7 +100,8 @@ export default function AnalyticsPanel({ scope = 'all' }) {
                 <StatBox title="Profit Factor" value={summary.profitFactor.toFixed(2)} />
                 <StatBox title="Total Trades" value={summary.totalTrades} />
                 <StatBox title="Win Rate" value={`${summary.winRate.toFixed(1)}%`} />
-                <StatBox title="Max Drawdown" value={`₹${summary.maxDrawdown.toFixed(2)}`} />
+                {/* --- CHANGED: StatBox now shows "Biggest Loss" instead of "Max Drawdown" --- */}
+                <StatBox title="Biggest Loss" value={`₹${summary.maxLoss.toFixed(2)}`} />
             </Grid>
             <Paper sx={{ p: 2, mb: 2 }}>
                 <Typography variant="body2" sx={{ mb: 1 }}>Equity Curve</Typography>

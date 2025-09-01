@@ -1,10 +1,12 @@
+# backend/core/strategy.py
+
 import asyncio
 import json
 import pandas as pd
 from datetime import datetime, date, timedelta, time
 from typing import TYPE_CHECKING, Optional
 import math
-import numpy as np # Add numpy import for the conviction score calculation
+import numpy as np 
 
 from .kite import kite
 from .websocket_manager import ConnectionManager
@@ -17,7 +19,8 @@ from .entry_strategies import (
     UoaEntryStrategy,
     TrendContinuationStrategy,
     RsiImmediateEntryStrategy,
-    MaCrossoverAnticipationStrategy
+    MaCrossoverStrategy,
+    CandlePatternEntryStrategy
 )
 
 if TYPE_CHECKING:
@@ -31,7 +34,7 @@ INDEX_CONFIG = {
 }
 
 MARKET_STANDARD_PARAMS = {
-    "strategy_priority": ["UOA", "MA_CROSSOVER", "TREND_CONTINUATION", "COMPREHENSIVE_CANDLESTICK", "RSI"],
+    "strategy_priority": ["UOA", "TREND_CONTINUATION", "MA_CROSSOVER", "CANDLE_PATTERN", "RSI", "INTRA_CANDLE"],
     'wma_period': 9, 'sma_period': 9, 'rsi_period': 9, 'rsi_signal_period': 3,
     'rsi_angle_lookback': 2, 'rsi_angle_threshold': 15.0, 'atr_period': 14,
     'min_atr_value': 4, 'ma_gap_threshold_pct': 0.05
@@ -51,29 +54,30 @@ class Strategy:
         self.position_lock = asyncio.Lock()
         self.db_lock = asyncio.Lock()
         
-        # --- THIS IS THE FIX ---
-        # Initialize the is_backtest attribute
         self.is_backtest = False
         
         self.index_name, self.index_token, self.index_symbol, self.strike_step, self.exchange = \
             self.config["name"], self.config["token"], self.config["symbol"], self.config["strike_step"], self.config["exchange"]
 
-        # --- Initialize refactored components ---
+        self.trend_candle_count = 0
+
+        # Initialize refactored components
         self.data_manager = DataManager(self.index_token, self.index_symbol, self.STRATEGY_PARAMS, self._log_debug, self.on_trend_update)
         self.risk_manager = RiskManager(self.params, self._log_debug)
         self.trade_logger = TradeLogger(self.db_lock)
         self.order_manager = OrderManager(self._log_debug)
 
-        # --- Dynamically build entry strategies based on config ---
+        # Dynamically build entry strategies
         strategy_map = {
             "INTRA_CANDLE": IntraCandlePatternStrategy,
             "UOA": UoaEntryStrategy,
             "TREND_CONTINUATION": TrendContinuationStrategy,
             "RSI": RsiImmediateEntryStrategy,
-            "MA_CROSSOVER": MaCrossoverAnticipationStrategy
+            "MA_CROSSOVER": MaCrossoverStrategy,
+            "CANDLE_PATTERN": CandlePatternEntryStrategy
         }
         self.entry_strategies = []
-        default_priority = ["UOA", "MA_CROSSOVER", "TREND_CONTINUATION", "COMPREHENSIVE_CANDLESTICK", "RSI"]
+        default_priority = ["UOA", "TREND_CONTINUATION", "MA_CROSSOVER", "CANDLE_PATTERN", "RSI", "INTRA_CANDLE"]
         priority_list = self.STRATEGY_PARAMS.get("strategy_priority", default_priority)
         for name in priority_list:
             if name in strategy_map:
@@ -82,6 +86,60 @@ class Strategy:
         self._reset_state()
         self.option_instruments = self.load_instruments()
         self.last_used_expiry = self.get_weekly_expiry()
+
+    async def _calculate_trade_charges(self, tradingsymbol, exchange, entry_price, exit_price, quantity):
+        """
+        Calculates the approximate total charges for a round-trip options trade
+        by making live API calls to the Kite charges endpoint.
+        """
+        try:
+            buy_params = {
+                "exchange": exchange, "tradingsymbol": tradingsymbol, "transaction_type": kite.TRANSACTION_TYPE_BUY,
+                "variety": kite.VARIETY_REGULAR, "product": kite.PRODUCT_MIS, "order_type": kite.ORDER_TYPE_MARKET,
+                "quantity": quantity, "price": entry_price
+            }
+            sell_params = {**buy_params, "transaction_type": kite.TRANSACTION_TYPE_SELL, "price": exit_price}
+
+            def get_buy_charges(): return kite.order_charges(**buy_params)
+            def get_sell_charges(): return kite.order_charges(**sell_params)
+
+            loop = asyncio.get_running_loop()
+            buy_charge_task = loop.run_in_executor(None, get_buy_charges)
+            sell_charge_task = loop.run_in_executor(None, get_sell_charges)
+            
+            results = await asyncio.gather(buy_charge_task, sell_charge_task)
+            total_charges = results[0]['total'] + results[1]['total']
+            
+            await self._log_debug("Charges API", f"Calculated charges for {tradingsymbol}: ₹{total_charges:.2f}")
+            return total_charges
+        except Exception as e:
+            await self._log_debug("Charges API ERROR", f"Could not fetch charges from API: {e}. Using estimated calculation.")
+            # Fallback to manual calculation if the API fails
+            brokerage = 40
+            sell_value = exit_price * quantity
+            buy_value = entry_price * quantity
+            stt = sell_value * 0.000625
+            txn_charges = (buy_value + sell_value) * 0.00053
+            gst = (brokerage + txn_charges) * 0.18
+            return brokerage + stt + txn_charges + gst
+
+    def _reset_state(self):
+        self.position = None
+        self.daily_gross_pnl = 0
+        self.daily_net_pnl = 0
+        self.total_charges = 0
+        self.daily_profit = 0
+        self.daily_loss = 0
+        self.daily_trade_limit_hit = False
+        self.trades_this_minute = 0
+        self.initial_subscription_done = False
+        self.token_to_symbol = {self.index_token: self.index_symbol}
+        self.uoa_watchlist = {}
+        self.performance_stats = {"total_trades": 0, "winning_trades": 0, "losing_trades": 0}
+        self.exit_cooldown_until: Optional[datetime] = None
+        self.disconnected_since: Optional[datetime] = None
+        self.next_partial_profit_level = 1
+        self.trend_candle_count = 0
 
     async def reload_params(self):
         await self._log_debug("System", "Live reloading of strategy parameters requested...")
@@ -179,25 +237,34 @@ class Strategy:
         p = self.position
         exit_price = self.data_manager.prices.get(p["symbol"], p["max_price"])
     
-        sell_log_message = f"Simulating SELL order for {p['symbol']}. Reason: {reason}. Qty: {p['qty']} @ Price: {exit_price:.2f}"
-        if self.params.get("trading_mode") == "Live Trading":
-            await self._log_debug("LIVE TRADE", sell_log_message)
-        else:
-            await self._log_debug("PAPER TRADE", sell_log_message)
-    
         try:
             if self.params.get("trading_mode") == "Live Trading":
                 await self.order_manager.execute_order(
                     transaction_type=kite.TRANSACTION_TYPE_SELL,
                     tradingsymbol=p["symbol"], exchange=self.exchange, quantity=p["qty"]
                 )
+            
+            gross_pnl = (exit_price - p["entry_price"]) * p["qty"]
+            charges = await self._calculate_trade_charges(
+                tradingsymbol=p["symbol"], exchange=self.exchange, entry_price=p["entry_price"],
+                exit_price=exit_price, quantity=p["qty"]
+            )
+            net_pnl = gross_pnl - charges
 
-            net_pnl = (exit_price - p["entry_price"]) * p["qty"]
-            self.daily_pnl += net_pnl
-            if net_pnl > 0: self.performance_stats["winning_trades"] += 1; self.daily_profit += net_pnl; _play_sound(self.manager, "profit")
-            else: self.performance_stats["losing_trades"] += 1; self.daily_loss += net_pnl; _play_sound(self.manager, "loss")
+            self.daily_gross_pnl += gross_pnl
+            self.total_charges += charges
+            self.daily_net_pnl += net_pnl
 
-            log_info = { "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "trigger_reason": p["trigger_reason"], "symbol": p["symbol"], "quantity": p["qty"], "pnl": round(net_pnl, 2), "entry_price": p["entry_price"], "exit_price": exit_price, "exit_reason": reason, "trend_state": self.data_manager.trend_state, "atr": round(self.data_manager.data_df.iloc[-1]["atr"], 2) if not self.data_manager.data_df.empty else 0 }
+            if gross_pnl > 0: 
+                self.performance_stats["winning_trades"] += 1
+                self.daily_profit += gross_pnl
+                _play_sound(self.manager, "profit")
+            else: 
+                self.performance_stats["losing_trades"] += 1
+                self.daily_loss += gross_pnl
+                _play_sound(self.manager, "loss")
+
+            log_info = { "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "trigger_reason": p["trigger_reason"], "symbol": p["symbol"], "quantity": p["qty"], "pnl": round(gross_pnl, 2), "entry_price": p["entry_price"], "exit_price": exit_price, "exit_reason": reason, "trend_state": self.data_manager.trend_state, "atr": round(self.data_manager.data_df.iloc[-1]["atr"], 2) if not self.data_manager.data_df.empty else 0 }
             await self.trade_logger.log_trade(log_info)
 
             await self._log_debug("Database", f"Trade for {p['symbol']} logged successfully.")
@@ -220,8 +287,8 @@ class Strategy:
             if ltp is None: return False
 
             if ltp > p["max_price"]: p["max_price"] = ltp
-            sl_points = float(self.params["trailing_sl_points"])
-            sl_percent = float(self.params["trailing_sl_percent"])
+            sl_points = float(self.params.get("trailing_sl_points", 5.0))
+            sl_percent = float(self.params.get("trailing_sl_percent", 10.0))
             p["trail_sl"] = round(max(p["trail_sl"], max(p["max_price"] - sl_points, p["max_price"] * (1 - sl_percent / 100))), 2)
 
             await self._update_ui_trade_status()
@@ -247,12 +314,23 @@ class Strategy:
                     tradingsymbol=p["symbol"], exchange=self.exchange, quantity=qty_to_exit
                 )
             
-            net_pnl = (exit_price - p["entry_price"]) * qty_to_exit
-            self.daily_pnl += net_pnl
-            if net_pnl > 0: self.daily_profit += net_pnl; _play_sound(self.manager, "profit")
+            gross_pnl = (exit_price - p["entry_price"]) * qty_to_exit
+            charges = await self._calculate_trade_charges(
+                tradingsymbol=p["symbol"], exchange=self.exchange, entry_price=p["entry_price"],
+                exit_price=exit_price, quantity=qty_to_exit
+            )
+            net_pnl = gross_pnl - charges
+
+            self.daily_gross_pnl += gross_pnl
+            self.total_charges += charges
+            self.daily_net_pnl += net_pnl
+            
+            if gross_pnl > 0: 
+                self.daily_profit += gross_pnl
+                _play_sound(self.manager, "profit")
             
             reason = f"Partial Profit-Take ({self.next_partial_profit_level})"
-            log_info = { "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "trigger_reason": p["trigger_reason"], "symbol": p["symbol"], "quantity": qty_to_exit, "pnl": round(net_pnl, 2), "entry_price": p["entry_price"], "exit_price": exit_price, "exit_reason": reason, "trend_state": self.data_manager.trend_state, "atr": round(self.data_manager.data_df.iloc[-1]["atr"], 2) if not self.data_manager.data_df.empty else 0 }
+            log_info = { "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "trigger_reason": p["trigger_reason"], "symbol": p["symbol"], "quantity": qty_to_exit, "pnl": round(gross_pnl, 2), "entry_price": p["entry_price"], "exit_price": exit_price, "exit_reason": reason, "trend_state": self.data_manager.trend_state, "atr": round(self.data_manager.data_df.iloc[-1]["atr"], 2) if not self.data_manager.data_df.empty else 0 }
             await self.trade_logger.log_trade(log_info)
             await self.manager.broadcast({"type": "new_trade_log", "payload": log_info})
 
@@ -278,15 +356,6 @@ class Strategy:
         if profit_pct >= target_pct:
             await self.partial_exit_position()
 
-    def _reset_state(self):
-        self.position, self.daily_pnl, self.daily_profit, self.daily_loss, self.daily_trade_limit_hit = None, 0, 0, 0, False
-        self.trades_this_minute, self.initial_subscription_done = 0, False
-        self.token_to_symbol, self.uoa_watchlist = {self.index_token: self.index_symbol}, {}
-        self.performance_stats = {"total_trades": 0, "winning_trades": 0, "losing_trades": 0}
-        self.exit_cooldown_until: Optional[datetime] = None
-        self.disconnected_since: Optional[datetime] = None
-        self.next_partial_profit_level = 1
-    
     async def handle_ticks_async(self, ticks):
         try:
             if not self.initial_subscription_done and any(t.get("instrument_token") == self.index_token for t in ticks):
@@ -322,8 +391,8 @@ class Strategy:
         if self.exit_cooldown_until and datetime.now() < self.exit_cooldown_until: return
         if self.trades_this_minute >= 2: return
         daily_sl, daily_pt = self.params.get("daily_sl", 0), self.params.get("daily_pt", 0)
-        if (daily_sl < 0 and self.daily_pnl <= daily_sl) or (daily_pt > 0 and self.daily_pnl >= daily_pt):
-            self.daily_trade_limit_hit = True; await self._log_debug("RISK", "Daily SL/PT hit. Trading disabled."); return
+        if (daily_sl < 0 and self.daily_gross_pnl <= daily_sl) or (daily_pt > 0 and self.daily_gross_pnl >= daily_pt):
+            self.daily_trade_limit_hit = True; await self._log_debug("RISK", "Daily Gross SL/PT hit. Trading disabled."); return
         for entry_strategy in self.entry_strategies:
             side, reason = await entry_strategy.check()
             if side and reason: 
@@ -353,7 +422,10 @@ class Strategy:
         await self.manager.broadcast({"type": "status_update", "payload": payload})
 
     async def _update_ui_performance(self):
-        payload = {"netPnl": self.daily_pnl, "grossProfit": self.daily_profit, "grossLoss": self.daily_loss, "wins": self.performance_stats["winning_trades"], "losses": self.performance_stats["losing_trades"]}
+        payload = {
+            "grossPnl": self.daily_gross_pnl, "totalCharges": self.total_charges, "netPnl": self.daily_net_pnl,
+            "wins": self.performance_stats["winning_trades"], "losses": self.performance_stats["losing_trades"]
+        }
         await self.manager.broadcast({"type": "daily_performance_update", "payload": payload})
 
     async def _update_ui_trade_status(self):
@@ -394,7 +466,6 @@ class Strategy:
                 if pd.notna(row.get("rsi_sma")): chart_data["rsi_sma"].append({"time": timestamp, "value": row["rsi_sma"]})
         await self.manager.broadcast({"type": "chart_data_update", "payload": chart_data})
 
-    # --- UOA SCANNER LOGIC ---
     def calculate_uoa_conviction_score(self, option_data, atm_strike):
         score, v_oi_ratio = 0, option_data.get('volume', 0) / (option_data.get('oi', 0) + 1)
         score += min(v_oi_ratio / 2.0, 5)
@@ -449,8 +520,11 @@ class Strategy:
         except Exception as e:
             await self._log_debug("Scanner ERROR", f"An error occurred during UOA scan: {e}")
 
-    # --- HELPER FUNCTIONS ---
-    async def on_trend_update(self, new_trend): self.trend_state = new_trend
+    async def on_trend_update(self, new_trend):
+        if self.data_manager.trend_state != new_trend:
+            self.trend_candle_count = 1
+        else:
+            self.trend_candle_count += 1
     
     def load_instruments(self):
         try: return [i for i in kite.instruments(self.exchange) if i['name'] == self.index_name and i['instrument_type'] in ['CE', 'PE']]
