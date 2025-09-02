@@ -15,10 +15,9 @@ from core.strategy import MARKET_STANDARD_PARAMS
 from core.optimiser import OptimizerBot
 from core.trade_logger import TradeLogger
 from core.bot_service import TradingBotService, get_bot_service
-from core.database import today_engine, all_engine # Using new database module
+from core.database import today_engine, all_engine
 
 
-# --- Lifespan Event Handler ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     print("Application startup...")
@@ -33,26 +32,21 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 
 DEFAULT_ORIGINS = "http://localhost:5173,http://localhost:3000"
-
 origins_str = os.getenv("ALLOWED_ORIGINS", DEFAULT_ORIGINS)
-
 allowed_origins_list = origins_str.split(",")
-
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allowed_origins_list,  # Use the dynamic list here
+    allow_origins=allowed_origins_list,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# --- Pydantic Models for API Requests ---
 class TokenRequest(BaseModel): request_token: str
 class StartRequest(BaseModel): params: dict; selectedIndex: str
 class WatchlistRequest(BaseModel): side: str; strike: int
 
-# --- API Endpoints ---
 @app.get("/api/status")
 async def get_status():
     if access_token:
@@ -100,17 +94,23 @@ async def run_optimizer(service: TradingBotService = Depends(get_bot_service)):
         return {"status": "success", "report": justifications}
     return {"status": "error", "report": justifications or ["Optimization failed."]}
 
+# --- THIS IS THE CORRECTED FUNCTION ---
 @app.post("/api/reset_params")
 async def reset_parameters(service: TradingBotService = Depends(get_bot_service)):
     try:
+        # Step 1: Overwrite the JSON file with the market standard defaults.
         with open("strategy_params.json", "w") as f:
             json.dump(MARKET_STANDARD_PARAMS, f, indent=4)
+        
+        # Step 2: If the bot is running, tell it to reload its parameters from the file.
         if service.strategy_instance:
-            service.strategy_instance.STRATEGY_PARAMS = MARKET_STANDARD_PARAMS.copy()
+            await service.strategy_instance.reload_params()
             await service.strategy_instance._log_debug("System", "Parameters have been reset to market defaults.")
+            
         return {"status": "success", "message": "Parameters reset.", "params": MARKET_STANDARD_PARAMS}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to reset parameters: {e}")
+        # The str(e) is included for better debugging if something else goes wrong.
+        raise HTTPException(status_code=500, detail=f"Failed to reset parameters: {str(e)}")
 
 @app.post("/api/start")
 async def start_bot(req: StartRequest, service: TradingBotService = Depends(get_bot_service)):
@@ -143,11 +143,10 @@ async def websocket_endpoint(websocket: WebSocket, service: TradingBotService = 
         while True:
             data = await websocket.receive_text()
             message = json.loads(data)
-
-            # --- ADDED: Ping/Pong keep-alive logic ---
+            
             if message.get("type") == "ping":
                 await websocket.send_text('{"type": "pong"}')
-                continue # Skip further processing for ping messages
+                continue
             
             if message.get("type") == "add_to_watchlist":
                 payload = message.get("payload", {})
@@ -161,5 +160,4 @@ async def websocket_endpoint(websocket: WebSocket, service: TradingBotService = 
         manager.disconnect()
 
 if __name__ == "__main__":
-    # For production, use Gunicorn as recommended. This block is for direct development runs.
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
