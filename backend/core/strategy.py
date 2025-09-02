@@ -27,7 +27,6 @@ if TYPE_CHECKING:
 
 def _play_sound(manager, sound): asyncio.create_task(manager.broadcast({"type": "play_sound", "payload": sound}))
 
-# ... (Constants like INDEX_CONFIG and MARKET_STANDARD_PARAMS are unchanged) ...
 INDEX_CONFIG = {
     "NIFTY": {"name": "NIFTY", "token": 256265, "symbol": "NSE:NIFTY 50", "strike_step": 50, "exchange": "NFO"},
     "SENSEX": {"name": "SENSEX", "token": 265, "symbol": "BSE:SENSEX", "strike_step": 100, "exchange": "BFO"},
@@ -40,9 +39,7 @@ MARKET_STANDARD_PARAMS = {
     'min_atr_value': 4, 'ma_gap_threshold_pct': 0.05
 }
 
-
 class Strategy:
-    # ... (__init__ and other methods are unchanged up to evaluate_exit_logic) ...
     def __init__(self, params, manager: ConnectionManager, selected_index="SENSEX"):
         self.params = self._sanitize_params(params)
         self.manager = manager
@@ -81,14 +78,57 @@ class Strategy:
         self.option_instruments = self.load_instruments()
         self.last_used_expiry = self.get_weekly_expiry()
 
+    # --- THIS IS THE CORRECTED FUNCTION (PATH A) ---
     async def _calculate_trade_charges(self, tradingsymbol, exchange, entry_price, exit_price, quantity):
-        brokerage = 40; 
-        sell_value = exit_price * quantity; 
+        """
+        Calculates the precise total charges for a round-trip options trade
+        based on the user-provided rates for NIFTY and SENSEX.
+        """
+        # --- Define Charge Rates ---
+        BROKERAGE_PER_ORDER = 20.0
+        # STT is 0.0625% on sell-side turnover for options as per new budget 2023.
+        # User specified 0.1% on sell side premium. Using user's value.
+        STT_RATE = 0.001 
+        GST_RATE = 0.18
+        SEBI_RATE = 10 / 1_00_00_000  # 10 per Crore
+        STAMP_DUTY_RATE = 0.00003 # 0.003% or 300 per Crore
+
+        # --- Exchange-Specific Transaction Charges ---
+        if exchange == "NFO":  # NIFTY Options on NSE
+            EXCHANGE_TXN_CHARGE_RATE = 0.00053 # As per NSE documentation
+        elif exchange == "BFO":  # SENSEX Options on BSE
+            EXCHANGE_TXN_CHARGE_RATE = 0.000325 # As per user's value
+        else: # Default fallback to NSE rate
+            EXCHANGE_TXN_CHARGE_RATE = 0.00053
+
+        # --- Calculate Base Values ---
         buy_value = entry_price * quantity
-        stt = sell_value * 0.000625; 
-        txn_charges = (buy_value + sell_value) * 0.00053
-        gst = (brokerage + txn_charges) * 0.18; 
-        return brokerage + stt + txn_charges + gst
+        sell_value = exit_price * quantity
+        total_turnover = buy_value + sell_value
+
+        # --- Calculate Individual Charges ---
+        
+        # 1. Brokerage: Flat fee per buy and sell order.
+        brokerage = BROKERAGE_PER_ORDER * 2
+
+        # 2. STT: Applied only on the sell-side value for intraday options trades.
+        # Note: The 0.0125% on intrinsic value is only for exercised ITM options held to expiry.
+        stt = sell_value * STT_RATE
+
+        # 3. Exchange Transaction Charges: Applied on total turnover, rate varies by exchange.
+        exchange_charges = total_turnover * EXCHANGE_TXN_CHARGE_RATE
+
+        # 4. SEBI Charges: Applied on total turnover.
+        sebi_charges = total_turnover * SEBI_RATE
+
+        # 5. GST: 18% on Brokerage, Transaction Charges, and SEBI Charges.
+        gst = (brokerage + exchange_charges + sebi_charges) * GST_RATE
+        
+        # 6. Stamp Duty: Applied only on the buy-side value.
+        stamp_duty = buy_value * STAMP_DUTY_RATE
+        
+        total_charges = brokerage + stt + exchange_charges + gst + sebi_charges + stamp_duty
+        return total_charges
 
     def _reset_state(self):
         self.position = None; self.daily_gross_pnl = 0; self.daily_net_pnl = 0; self.total_charges = 0
@@ -198,14 +238,12 @@ class Strategy:
         if not self.position: return
         p = self.position; exit_price = self.data_manager.prices.get(p["symbol"], p["max_price"])
         try:
-            # --- NEW: Added a debug log for the sell action for clarity ---
             sell_log_message = f"Simulating SELL order for {p['symbol']}. Reason: {reason}"
             if self.params.get("trading_mode") == "Live Trading":
                 await self._log_debug("LIVE TRADE", sell_log_message)
                 await self.order_manager.execute_order(transaction_type=kite.TRANSACTION_TYPE_SELL, tradingsymbol=p["symbol"], exchange=self.exchange, quantity=p["qty"])
             else:
                 await self._log_debug("PAPER TRADE", sell_log_message)
-                
             gross_pnl = (exit_price - p["entry_price"]) * p["qty"]
             charges = await self._calculate_trade_charges(tradingsymbol=p["symbol"], exchange=self.exchange, entry_price=p["entry_price"], exit_price=exit_price, quantity=p["qty"])
             net_pnl = gross_pnl - charges
@@ -222,42 +260,29 @@ class Strategy:
         except Exception as e:
             await self._log_debug("CRITICAL-EXIT-FAIL", f"FAILED TO EXIT {p['symbol']}! MANUAL INTERVENTION REQUIRED! Error: {e}"); _play_sound(self.manager, "warning")
 
-    # --- THIS IS THE CORRECTED FUNCTION ---
     async def evaluate_exit_logic(self):
         async with self.position_lock:
             if not self.position: return
-            
             p, ltp = self.position, self.data_manager.prices.get(self.position["symbol"])
             if ltp is None: return
-
-            # Standard Trailing Stop-Loss Logic
             if ltp > p["max_price"]: p["max_price"] = ltp
             sl_points = float(self.params.get("trailing_sl_points", 5.0))
             sl_percent = float(self.params.get("trailing_sl_percent", 10.0))
             p["trail_sl"] = round(max(p["trail_sl"], max(p["max_price"] - sl_points, p["max_price"] * (1 - sl_percent / 100))), 2)
             await self._update_ui_trade_status()
-            
             if ltp <= p["trail_sl"]:
-                await self.exit_position("Trailing SL")
-                return
-
-            # Invalidation Exit Logic
+                await self.exit_position("Trailing SL"); return
             if 'open' in self.data_manager.current_candle and not self.data_manager.data_df.empty:
                 live_index_candle = self.data_manager.current_candle
                 prev_index_candle = self.data_manager.data_df.iloc[-1]
-                
                 if p['direction'] == 'CE' and self._is_bearish_engulfing(prev_index_candle, live_index_candle):
                     await self._log_debug("Exit Logic", "Invalidation: Bearish Engulfing on index. Exiting CE.")
-                    await self.exit_position("Invalidation: Bearish Engulfing")
-                    return
+                    await self.exit_position("Invalidation: Bearish Engulfing"); return
                 elif p['direction'] == 'PE' and self._is_bullish_engulfing(prev_index_candle, live_index_candle):
                     await self._log_debug("Exit Logic", "Invalidation: Bullish Engulfing on index. Exiting PE.")
-                    await self.exit_position("Invalidation: Bullish Engulfing")
-                    return
+                    await self.exit_position("Invalidation: Bullish Engulfing"); return
     
-    # ... (the rest of the file continues below) ...
     async def partial_exit_position(self):
-        # ... (This function remains unchanged) ...
         if not self.position: return
         p, partial_exit_pct = self.position, self.params.get("partial_exit_pct", 50); lot_size = p.get("lot_size", 1)
         if lot_size <= 0: lot_size = 1
@@ -276,6 +301,7 @@ class Strategy:
             reason = f"Partial Profit-Take ({self.next_partial_profit_level})"
             log_info = { "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f"), "trigger_reason": p["trigger_reason"], "symbol": p["symbol"], "quantity": qty_to_exit, "pnl": round(gross_pnl, 2), "entry_price": p["entry_price"], "exit_price": exit_price, "exit_reason": reason, "trend_state": self.data_manager.trend_state, "atr": round(self.data_manager.data_df.iloc[-1]["atr"], 2) if not self.data_manager.data_df.empty else 0, "charges": round(charges, 2), "net_pnl": round(net_pnl, 2) }
             await self.trade_logger.log_trade(log_info)
+            await self.trade_logger.log_trade(log_info)
             await self.manager.broadcast({"type": "new_trade_log", "payload": log_info})
             p["qty"] -= qty_to_exit; self.next_partial_profit_level += 1
             await self._log_debug("Profit.Take", f"Remaining quantity: {p['qty']}.")
@@ -285,9 +311,8 @@ class Strategy:
 
     async def check_partial_profit_take(self):
         if not self.position: return
-        # This needs to be inside the lock to prevent race conditions with exit_position
         async with self.position_lock:
-            if not self.position: return # Check again after acquiring lock
+            if not self.position: return
             p, ltp = self.position, self.data_manager.prices.get(self.position["symbol"])
             if ltp is None: return
             partial_profit_pct = self.params.get("partial_profit_pct", 0)
@@ -312,8 +337,6 @@ class Strategy:
                     if symbol == self.index_symbol:
                         if is_new_minute: self.trades_this_minute = 0; await self.data_manager.on_new_minute(ltp)
                         await self.check_trade_entry()
-                    
-                    # --- THIS IS THE CORRECTED LOGIC ---
                     if self.position and self.position["symbol"] == symbol:
                         await self.check_partial_profit_take()
                         await self.evaluate_exit_logic()
@@ -509,3 +532,4 @@ class Strategy:
                 if key in p and p[key]: p[key] = float(p[key])
         except (ValueError, TypeError) as e: print(f"Warning: Could not convert a parameter to a number: {e}")
         return p
+
