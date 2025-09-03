@@ -2,7 +2,7 @@ import { create } from 'zustand';
 
 // ===== Parameters Slice =====
 const createParametersSlice = (set) => ({
-    params: {}, // Initial state will be loaded by an action
+    params: {},
     loadParams: () => {
         const savedParams = localStorage.getItem('tradingParams');
         const defaultParams = {
@@ -28,26 +28,30 @@ const createParametersSlice = (set) => ({
 const createRealtimeDataSlice = (set) => ({
     chartData: null,
     botStatus: { connection: 'DISCONNECTED', mode: 'NOT STARTED', indexPrice: 0, trend: '---', indexName: 'INDEX', is_running: false },
-    // MODIFIED: Updated dailyPerformance state shape for Net P&L
     dailyPerformance: { grossPnl: 0, totalCharges: 0, netPnl: 0, wins: 0, losses: 0 },
     currentTrade: null,
     debugLogs: [],
     tradeHistory: [],
+    allTimeTradeHistory: [], 
     optionChain: [],
     uoaList: [],
     socketStatus: 'DISCONNECTED',
     
     setSocketStatus: (status) => set({ socketStatus: status }),
     setTradeHistory: (history) => set({ tradeHistory: history }),
+    setAllTimeTradeHistory: (history) => set({ allTimeTradeHistory: history }),
     updateBotStatus: (payload) => set({ botStatus: payload }),
     updateDailyPerformance: (payload) => set({ dailyPerformance: payload }),
     updateCurrentTrade: (payload) => set({ currentTrade: payload }),
     addDebugLog: (payload) => set(state => ({ debugLogs: [payload, ...state.debugLogs].slice(0, 500) })),
-    updateTradeHistory: (payload) => set({ tradeHistory: payload }),
     updateOptionChain: (payload) => set({ optionChain: payload }),
     updateUoaList: (payload) => set({ uoaList: payload }),
     updateChartData: (payload) => set({ chartData: payload }),
-    addTradeToHistory: (trade) => set(state => ({ tradeHistory: [trade, ...state.tradeHistory] })),
+    addTradeToHistory: (trade) => set(state => ({ 
+        tradeHistory: [trade, ...state.tradeHistory],
+        // Also add the new trade to the all-time list for live updates
+        allTimeTradeHistory: [trade, ...state.allTimeTradeHistory]
+    })),
 });
 
 export const useStore = create((...a) => ({
@@ -55,6 +59,4 @@ export const useStore = create((...a) => ({
     ...createRealtimeDataSlice(...a),
 }));
 
-// Initialize parameters from localStorage on load
 useStore.getState().loadParams();
-

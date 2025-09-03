@@ -32,7 +32,6 @@ class TradeLogger:
         Creates/updates tables if they don't exist and clears the 'today'
         database if it's a new day.
         """
-        # --- MODIFIED: Added charges and net_pnl columns to the schema ---
         create_table_sql = sql_text('''
             CREATE TABLE IF NOT EXISTS trades (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -51,21 +50,17 @@ class TradeLogger:
             )
         ''')
         
-        # --- NEW: Logic to add new columns if they don't exist (for backward compatibility) ---
         def upgrade_schema(engine):
             with engine.connect() as conn:
-                conn.execute(create_table_sql) # First, ensure table exists
-                # Check for and add new columns individually
+                conn.execute(create_table_sql)
                 cursor = conn.execute(sql_text("PRAGMA table_info(trades);"))
                 columns = [row[1] for row in cursor]
                 if 'charges' not in columns:
                     conn.execute(sql_text("ALTER TABLE trades ADD COLUMN charges REAL;"))
                 if 'net_pnl' not in columns:
                     conn.execute(sql_text("ALTER TABLE trades ADD COLUMN net_pnl REAL;"))
-                # Use .commit() because ALTER TABLE cannot run in a transaction block on some dbs
                 if hasattr(conn, 'commit'): conn.commit() 
 
-        # Upgrade schema for both databases
         upgrade_schema(today_engine)
         upgrade_schema(all_engine)
         
@@ -74,10 +69,16 @@ class TradeLogger:
         except FileNotFoundError: last_run_date = ""
 
         today_date = datetime.now().strftime("%Y-%m-%d")
+        
         if last_run_date != today_date:
             print(f"New day detected. Clearing today's trade log...")
+            # --- THIS IS THE CORRECTED LOGIC ---
+            # It now ONLY clears the today_engine.
             with today_engine.begin() as conn:
                 conn.execute(sql_text("DELETE FROM trades"))
+            
+            # The incorrect block that cleared all_engine has been REMOVED.
+            
             with open("last_run_date.txt", "w") as f: f.write(today_date)
             print("Today's trade log cleared.")
 

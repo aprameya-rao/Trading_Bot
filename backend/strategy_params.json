@@ -14,6 +14,6 @@
     "rsi_angle_lookback": 2,
     "rsi_angle_threshold": 15.0,
     "atr_period": 14,
-    "min_atr_value": 4.41,
+    "min_atr_value": 4,
     "ma_gap_threshold_pct": 0.05
 }

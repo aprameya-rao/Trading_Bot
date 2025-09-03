@@ -4,13 +4,13 @@ import { Grid, ThemeProvider, createTheme, CssBaseline, Box } from '@mui/materia
 import StatusPanel from './components/StatusPanel';
 import ParametersPanel from './components/ParametersPanel';
 import IntelligencePanel from './components/IntelligencePanel';
-import NetPerformancePanel from './components/NetPerformancePanel'; // MODIFIED: Import the new panel
+import NetPerformancePanel from './components/NetPerformancePanel';
 import CurrentTradePanel from './components/CurrentTradePanel';
 import IndexChart from './components/IndexChart';
 import OptionChain from './components/OptionChain';
 import LogTabs from './components/LogTabs';
 import { createSocketConnection } from './services/socket';
-import { manualExit, getTradeHistory } from './services/api';
+import { manualExit, getTradeHistory, getTradeHistoryAll } from './services/api';
 import { useStore } from './store/store';
 import { useSnackbar } from 'notistack';
 
@@ -55,11 +55,19 @@ function App() {
             const handleOpen = async () => {
                 setState({ socketStatus: 'CONNECTED' });
                 
+                // Fetch both sets of data concurrently when the app starts.
                 try {
-                    console.log("Fetching today's trade history...");
-                    const history = await getTradeHistory();
-                    getState().setTradeHistory(history);
-                    console.log(`Loaded ${history.length} trades from history.`);
+                    console.log("Fetching trade histories...");
+                    const [todayHistory, allTimeHistory] = await Promise.all([
+                        getTradeHistory(),
+                        getTradeHistoryAll()
+                    ]);
+                    
+                    getState().setTradeHistory(todayHistory);
+                    getState().setAllTimeTradeHistory(allTimeHistory);
+                    
+                    console.log(`Loaded ${todayHistory.length} trades from today.`);
+                    console.log(`Loaded ${allTimeHistory.length} trades from all-time history.`);
                 } catch (error) {
                     enqueueSnackbar('Could not load trade history.', { variant: 'error' });
                 }
@@ -138,7 +146,6 @@ function App() {
                         <Grid item><CurrentTradePanel trade={currentTrade} onManualExit={handleManualExit} /></Grid>
                         <Grid item><ParametersPanel isMock={MOCK_MODE} /></Grid>
                         <Grid item><IntelligencePanel /></Grid>
-                        {/* MODIFIED: Replaced PerformancePanel with the new NetPerformancePanel */}
                         <Grid item><NetPerformancePanel data={dailyPerformance} /></Grid>
                     </Grid>
                     <Grid item xs={12} md={8} sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -153,4 +160,3 @@ function App() {
 }
 
 export default App;
-
