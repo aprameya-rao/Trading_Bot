@@ -368,8 +368,8 @@ class Strategy:
         if self.exit_cooldown_until and datetime.now() < self.exit_cooldown_until: return
         if self.trades_this_minute >= 2: return
         daily_sl, daily_pt = self.params.get("daily_sl", 0), self.params.get("daily_pt", 0)
-        if (daily_sl < 0 and self.daily_gross_pnl <= daily_sl) or (daily_pt > 0 and self.daily_gross_pnl >= daily_pt):
-            self.daily_trade_limit_hit = True; await self._log_debug("RISK", "Daily Gross SL/PT hit. Trading disabled."); return
+        if (daily_sl < 0 and self.daily_net_pnl <= daily_sl) or (daily_pt > 0 and self.daily_net_pnl >= daily_pt):
+            self.daily_trade_limit_hit = True; await self._log_debug("RISK", "Daily Net SL/PT hit. Trading disabled."); return
         if await self._check_pending_reversal_entry(): return
         for entry_strategy in self.entry_strategies:
             side, reason = await entry_strategy.check()
@@ -462,6 +462,19 @@ class Strategy:
             return True
         await self._log_debug("UOA", f"Could not find {side} option for strike {strike}"); _play_sound(self.manager, "warning"); return False
     
+    async def reset_uoa_watchlist(self):
+        """Clears the UOA watchlist and updates the UI."""
+        await self._log_debug("UOA", "Watchlist reset requested by user.")
+        
+        # Clear the internal dictionary
+        self.uoa_watchlist.clear()
+        
+        # Broadcast the empty list to the UI so it updates instantly
+        await self._update_ui_uoa_list()
+        
+        # Play a sound for confirmation
+        _play_sound(self.manager, "warning")
+
     async def scan_for_unusual_activity(self):
         if self.is_backtest: return
         try:

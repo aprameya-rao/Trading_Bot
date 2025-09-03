@@ -49,3 +49,5 @@ export const resetParams = () => apiRequest('/reset_params', { method: 'POST' })
 // --- Data Fetching ---
 export const getTradeHistory = () => apiRequest('/trade_history');
 export const getTradeHistoryAll = () => apiRequest('/trade_history_all');
+
+export const resetUoaWatchlist = () => apiRequest('/reset_uoa_watchlist', { method: 'POST' });

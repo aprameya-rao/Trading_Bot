@@ -4,8 +4,9 @@
         "TREND_CONTINUATION",
         "MA_CROSSOVER",
         "CANDLE_PATTERN",
-        "RSI",
-        "INTRA_CANDLE"
+        "INTRA_CANDLE",
+        "RSI"
+        
     ],
     "wma_period": 9,
     "sma_period": 9,

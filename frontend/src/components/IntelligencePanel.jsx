@@ -1,18 +1,22 @@
 import React, { useState } from 'react';
 import { Paper, Typography, Button, CircularProgress } from '@mui/material';
 import { useSnackbar } from 'notistack';
-import { runOptimizer, resetParams } from '../services/api'; // --- CHANGED: Import from api.js
+import { runOptimizer, resetParams, resetUoaWatchlist } from '../services/api';
 
 export default function IntelligencePanel() {
     const [loading, setLoading] = useState(false);
     const [resetLoading, setResetLoading] = useState(false);
+    
+    // --- THIS IS THE CRITICAL LINE TO CHECK ---
+    // Ensure this line is exactly as written here.
+    const [clearUoaLoading, setClearUoaLoading] = useState(false);
+    
     const { enqueueSnackbar } = useSnackbar();
 
     const handleOptimize = async () => {
         setLoading(true);
         enqueueSnackbar('Starting optimization... This may take a moment.', { variant: 'info' });
         try {
-            // --- CHANGED: Use the service function ---
             const data = await runOptimizer();
             enqueueSnackbar(data.report.join(' | '), { 
                 variant: 'success', 
@@ -29,7 +33,6 @@ export default function IntelligencePanel() {
         if (window.confirm('This will reset your strategy parameters to market standard defaults. Are you sure?')) {
             setResetLoading(true);
             try {
-                // --- CHANGED: Use the service function ---
                 const data = await resetParams();
                 enqueueSnackbar(data.message, { variant: 'success' });
             } catch (error) {
@@ -39,15 +42,30 @@ export default function IntelligencePanel() {
         }
     };
 
-    // The JSX return block remains the same
+    const handleClearUoa = async () => {
+        if (window.confirm('Are you sure you want to clear the entire UOA Watchlist?')) {
+            setClearUoaLoading(true);
+            try {
+                const data = await resetUoaWatchlist();
+                enqueueSnackbar(data.message, { variant: 'success' });
+            } catch (error) {
+                enqueueSnackbar(error.message, { variant: 'error' });
+            }
+            setClearUoaLoading(false);
+        }
+    };
+
     return (
         <Paper elevation={3} sx={{ p: 2 }}>
             <Typography variant="body2" sx={{ mb: 1 }}>Intelligence</Typography>
-            <Button fullWidth variant="outlined" sx={{ mb: 1 }} onClick={handleOptimize} disabled={loading || resetLoading}>
+            <Button fullWidth variant="outlined" sx={{ mb: 1 }} onClick={handleOptimize} disabled={loading || resetLoading || clearUoaLoading}>
                 {loading ? <CircularProgress size={24} /> : 'Analyze & Optimize Now'}
             </Button>
-            <Button fullWidth variant="outlined" color="warning" onClick={handleReset} disabled={loading || resetLoading}>
+            <Button fullWidth variant="outlined" color="warning" sx={{ mb: 1 }} onClick={handleReset} disabled={loading || resetLoading || clearUoaLoading}>
                 {resetLoading ? <CircularProgress size={24} color="inherit" /> : 'Reset to Market Standards'}
+            </Button>
+            <Button fullWidth variant="outlined" color="error" onClick={handleClearUoa} disabled={loading || resetLoading || clearUoaLoading}>
+                {clearUoaLoading ? <CircularProgress size={24} color="inherit" /> : 'Clear UOA Watchlist'}
             </Button>
         </Paper>
     );

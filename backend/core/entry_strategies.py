@@ -158,6 +158,7 @@ class BaseEntryStrategy(ABC):
 class UoaEntryStrategy(BaseEntryStrategy):
     """Acts on the UOA watchlist, with entry confirmation from live price action."""
     async def check(self):
+        # This part remains unchanged.
         if not self.strategy.uoa_watchlist: return None, None
         
         for token, data in list(self.strategy.uoa_watchlist.items()):
@@ -169,8 +170,8 @@ class UoaEntryStrategy(BaseEntryStrategy):
             if not option_candle or 'open' not in option_candle or not current_price:
                 continue
 
-            # Original script condition: price must be above the current minute's open
             if current_price <= option_candle['open']:
+                await self.strategy._log_debug("UOA Trigger", f"REJECTED: {symbol} price {current_price} is not above its 1-min open {option_candle['open']}.")
                 continue
                 
             opt = self.strategy.get_entry_option(side, strike=strike)
@@ -179,6 +180,45 @@ class UoaEntryStrategy(BaseEntryStrategy):
                 await self.strategy._update_ui_uoa_list()
                 return side, "UOA_Entry"
         return None, None
+
+    # --- THIS IS THE MODIFIED METHOD WITH THE ACCELERATION CHECK REMOVED ---
+    async def _validate_entry_conditions(self, side, opt):
+        """
+        Overridden validation for UOA with detailed step-by-step logging.
+        It bypasses '_is_opposite_falling' AND '_is_accelerating' checks.
+        """
+        if not opt:
+            return False
+
+        symbol = opt['tradingsymbol']
+        log_report = []
+
+        # Check 1: Is the option price rising right now? (STILL ACTIVE)
+        is_rising = self.data_manager.is_price_rising(symbol)
+        log_report.append(f"Price Rising: {is_rising}")
+        if not is_rising:
+            await self.strategy._log_debug("UOA Validation", f"REJECTED {symbol} | Report: [{', '.join(log_report)}]")
+            return False
+
+        # Check 2: Is the micro-trend momentum okay? (STILL ACTIVE)
+        momentum_is_ok = self._momentum_ok(side, symbol)
+        log_report.append(f"Momentum OK: {momentum_is_ok}")
+        if not momentum_is_ok:
+            await self.strategy._log_debug("UOA Validation", f"REJECTED {symbol} | Report: [{', '.join(log_report)}]")
+            return False
+        
+        # Check 3: Is the price accelerating? (NOW BYPASSED)
+        # The entire block below has been commented out.
+        #
+        # is_accelerating = self._is_accelerating(symbol)
+        # log_report.append(f"Accelerating: {is_accelerating}")
+        # if not is_accelerating:
+        #     await self.strategy._log_debug("UOA Validation", f"REJECTED {symbol} | Report: [{', '.join(log_report)}]")
+        #     return False
+
+        # If the remaining checks have passed, log the success report.
+        await self.strategy._log_debug("UOA Validation", f"PASS {symbol} | Report: [{', '.join(log_report)}]")
+        return True
 
 class TrendContinuationStrategy(BaseEntryStrategy):
     """Enters on a breakout of the previous candle's high/low in the direction of the trend."""

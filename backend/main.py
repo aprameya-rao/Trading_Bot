@@ -94,6 +94,14 @@ async def run_optimizer(service: TradingBotService = Depends(get_bot_service)):
         return {"status": "success", "report": justifications}
     return {"status": "error", "report": justifications or ["Optimization failed."]}
 
+@app.post("/api/reset_uoa_watchlist")
+async def reset_uoa(service: TradingBotService = Depends(get_bot_service)):
+    if not service.strategy_instance:
+        raise HTTPException(status_code=400, detail="Bot is not running.")
+    
+    await service.strategy_instance.reset_uoa_watchlist()
+    return {"status": "success", "message": "UOA Watchlist has been cleared."}
+
 # --- THIS IS THE CORRECTED FUNCTION ---
 @app.post("/api/reset_params")
 async def reset_parameters(service: TradingBotService = Depends(get_bot_service)):
