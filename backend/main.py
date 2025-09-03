@@ -31,13 +31,11 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-DEFAULT_ORIGINS = "http://localhost:5173,http://localhost:3000"
-origins_str = os.getenv("ALLOWED_ORIGINS", DEFAULT_ORIGINS)
-allowed_origins_list = origins_str.split(",")
+
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allowed_origins_list,
+    allow_origins=["*"],  # Allows connections from any device on your network
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

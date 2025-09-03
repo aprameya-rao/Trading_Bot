@@ -1,6 +1,7 @@
 import { useSnackbar } from 'notistack';
 
-const API_BASE_URL = `${import.meta.env.VITE_API_HTTP_URL}/api`;
+const MASTER_URL = import.meta.env.VITE_MASTER_BACKEND_URL;
+const API_BASE_URL = MASTER_URL ? `${MASTER_URL}/api` : `${import.meta.env.VITE_API_HTTP_URL}/api`;
 
 /**
  * A helper function to handle fetch requests and responses.
