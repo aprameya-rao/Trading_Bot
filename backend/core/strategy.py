@@ -444,7 +444,9 @@ class Strategy:
             for p in pairs: 
                 ce_symbol = p["ce"]["tradingsymbol"] if p["ce"] else None; pe_symbol = p["pe"]["tradingsymbol"] if p["pe"] else None
                 data.append({"strike": p["strike"], "ce_ltp": self.data_manager.prices.get(ce_symbol, "--") if ce_symbol else "--", "pe_ltp": self.data_manager.prices.get(pe_symbol, "--") if pe_symbol else "--"})
+        # The broadcast is now OUTSIDE the 'if' block again.
         await self.manager.broadcast({"type": "option_chain_update", "payload": data})
+
 
     async def _update_ui_chart_data(self):
         temp_df = self.data_manager.data_df.copy()

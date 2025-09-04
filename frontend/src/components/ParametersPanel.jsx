@@ -67,19 +67,19 @@ export default function ParametersPanel({ isMock = false }) {
 
     const handleStop = async () => {
         setIsStopLoading(true);
-        try {
-            const data = await stopBot();
-            enqueueSnackbar(data.message, { variant: 'warning' });
-            
-            // This will force a hard refresh of the page after the stop is successful.
-            window.location.reload();
+            try {
+                const data = await stopBot();
+                enqueueSnackbar(data.message, { variant: 'warning' });
+                
+                // --- MODIFIED LINE ---
+                // Instead of reloading, just reset the store's state.
+                useStore.getState().resetRealtimeData();
 
-        } catch (error) {
-            enqueueSnackbar(error.message, { variant: 'error' });
-            setIsStopLoading(false);
-        }
+            } catch (error) {
+                enqueueSnackbar(error.message, { variant: 'error' });
+            }
+            setIsStopLoading(false); // We need this again now
     };
-
     if (auth.status === 'loading') return <Paper sx={{ p: 2, textAlign: 'center' }}><CircularProgress /></Paper>;
     
     if (auth.status !== 'authenticated') {

@@ -2,6 +2,20 @@ import { create } from 'zustand';
 
 const spectatorFlag = !!import.meta.env.VITE_MASTER_BACKEND_URL;
 
+
+const initialRealtimeState = {
+    chartData: null,
+    botStatus: { connection: 'DISCONNECTED', mode: 'NOT STARTED', indexPrice: 0, trend: '---', indexName: 'INDEX', is_running: false },
+    dailyPerformance: { grossPnl: 0, totalCharges: 0, netPnl: 0, wins: 0, losses: 0 },
+    currentTrade: null,
+    debugLogs: [],
+    tradeHistory: [],
+    allTimeTradeHistory: [], 
+    optionChain: [],
+    uoaList: [],
+    socketStatus: 'DISCONNECTED',
+};
+
 // ===== Parameters Slice =====
 const createParametersSlice = (set) => ({
     params: {},
@@ -38,6 +52,7 @@ const createRealtimeDataSlice = (set) => ({
     optionChain: [],
     uoaList: [],
     socketStatus: 'DISCONNECTED',
+    resetRealtimeData: () => set(initialRealtimeState),
     isSpectatorMode: spectatorFlag,
     setSocketStatus: (status) => set({ socketStatus: status }),
     setTradeHistory: (history) => set({ tradeHistory: history }),
@@ -53,6 +68,7 @@ const createRealtimeDataSlice = (set) => ({
         tradeHistory: [trade, ...state.tradeHistory],
         // Also add the new trade to the all-time list for live updates
         allTimeTradeHistory: [trade, ...state.allTimeTradeHistory]
+
     })),
 });
 

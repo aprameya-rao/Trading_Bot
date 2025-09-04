@@ -113,7 +113,7 @@ class BaseEntryStrategy(ABC):
         if history[-1] < history[-2]:
             return True
         
-        await self.strategy._log_debug("Trade Rejected", f"Opposite option {opposite_symbol} is not falling.")
+        # await self.strategy._log_debug("Trade Rejected", f"Opposite option {opposite_symbol} is not falling.")
         return False
 
     def _momentum_ok(self, side, opt_sym, look=3):
