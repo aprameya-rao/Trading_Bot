@@ -1,5 +1,7 @@
 import { create } from 'zustand';
 
+const spectatorFlag = !!import.meta.env.VITE_MASTER_BACKEND_URL;
+
 // ===== Parameters Slice =====
 const createParametersSlice = (set) => ({
     params: {},
@@ -36,7 +38,7 @@ const createRealtimeDataSlice = (set) => ({
     optionChain: [],
     uoaList: [],
     socketStatus: 'DISCONNECTED',
-    
+    isSpectatorMode: spectatorFlag,
     setSocketStatus: (status) => set({ socketStatus: status }),
     setTradeHistory: (history) => set({ tradeHistory: history }),
     setAllTimeTradeHistory: (history) => set({ allTimeTradeHistory: history }),

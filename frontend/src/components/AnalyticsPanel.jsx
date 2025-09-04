@@ -36,7 +36,6 @@ const ChartComponent = ({ data }) => {
 };
 
 export default function AnalyticsPanel({ scope = 'all' }) {
-    // Read the correct data slice from the central store based on the 'scope' prop.
     const tradesToAnalyze = useStore(state => 
         scope === 'today' ? state.tradeHistory : state.allTimeTradeHistory
     );
@@ -49,11 +48,18 @@ export default function AnalyticsPanel({ scope = 'all' }) {
         let totalPnl = 0, grossProfit = 0, grossLoss = 0, winningTrades = 0, losingTrades = 0, maxLoss = 0;
         const equityCurve = [];
         
-        // Sort trades chronologically to build the equity curve correctly.
         const sortedTrades = [...tradesToAnalyze].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
 
         sortedTrades.forEach((trade) => {
-            totalPnl += trade.net_pnl; // Use net_pnl for accurate equity curve
+            // --- THIS IS THE NEW VALIDATION BLOCK ---
+            // It checks if net_pnl is a valid number before using it.
+            if (typeof trade.net_pnl !== 'number' || isNaN(trade.net_pnl)) {
+                console.warn('Skipping invalid trade record for equity curve:', trade);
+                return; // Skip this data point and continue to the next one
+            }
+            // --- END OF NEW VALIDATION BLOCK ---
+
+            totalPnl += trade.net_pnl;
             if (trade.pnl > 0) { 
                 winningTrades++; 
                 grossProfit += trade.pnl; 
@@ -71,7 +77,7 @@ export default function AnalyticsPanel({ scope = 'all' }) {
         const profitFactor = grossLoss > 0 ? grossProfit / grossLoss : Infinity;
 
         return {
-            trades: sortedTrades.reverse(), // Reverse for latest-first display in the table
+            trades: sortedTrades.reverse(),
             equityCurve,
             summary: { totalPnl, profitFactor, totalTrades, winRate, maxLoss },
         };
@@ -93,7 +99,7 @@ export default function AnalyticsPanel({ scope = 'all' }) {
     return (
         <Box>
             <Grid container spacing={2} sx={{ mb: 2 }}>
-                <StatBox title="Total Gross P&L" value={`₹${summary.totalPnl.toFixed(2)}`} />
+                <StatBox title="Total Net P&L" value={`₹${summary.totalPnl.toFixed(2)}`} />
                 <StatBox title="Profit Factor" value={summary.profitFactor.toFixed(2)} />
                 <StatBox title="Total Trades" value={summary.totalTrades} />
                 <StatBox title="Win Rate" value={`${summary.winRate.toFixed(1)}%`} />
@@ -109,7 +115,7 @@ export default function AnalyticsPanel({ scope = 'all' }) {
                         <TableRow>
                             <TableCell>Timestamp</TableCell><TableCell>Symbol</TableCell><TableCell>Qty</TableCell>
                             <TableCell>Trigger</TableCell><TableCell align="right">Entry</TableCell>
-                            <TableCell align="right">Exit</TableCell><TableCell align="right">P&L (Gross)</TableCell>
+                            <TableCell align="right">Exit</TableCell><TableCell align="right">P&L (Net)</TableCell>
                         </TableRow>
                     </TableHead>
                     <TableBody>
@@ -120,7 +126,10 @@ export default function AnalyticsPanel({ scope = 'all' }) {
                                 <TableCell>{trade.trigger_reason}</TableCell>
                                 <TableCell align="right">{trade.entry_price.toFixed(2)}</TableCell>
                                 <TableCell align="right">{trade.exit_price.toFixed(2)}</TableCell>
-                                <TableCell align="right" sx={{ color: trade.pnl > 0 ? 'success.main' : 'error.main' }}>{trade.pnl.toFixed(2)}</TableCell>
+                                <TableCell align="right" sx={{ color: trade.net_pnl > 0 ? 'success.main' : 'error.main' }}>
+                                    {/* Also check here before trying to format the number */}
+                                    {typeof trade.net_pnl === 'number' ? trade.net_pnl.toFixed(2) : 'N/A'}
+                                </TableCell>
                             </TableRow>
                         ))}
                     </TableBody>

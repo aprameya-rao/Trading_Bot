@@ -2,15 +2,13 @@ import React, { useState } from 'react';
 import { Paper, Typography, Button, CircularProgress } from '@mui/material';
 import { useSnackbar } from 'notistack';
 import { runOptimizer, resetParams, resetUoaWatchlist } from '../services/api';
+import { useStore } from '../store/store'; // Add this import
 
 export default function IntelligencePanel() {
     const [loading, setLoading] = useState(false);
     const [resetLoading, setResetLoading] = useState(false);
-    
-    // --- THIS IS THE CRITICAL LINE TO CHECK ---
-    // Ensure this line is exactly as written here.
     const [clearUoaLoading, setClearUoaLoading] = useState(false);
-    
+    const isSpectator = useStore(state => state.isSpectatorMode); // Get the flag
     const { enqueueSnackbar } = useSnackbar();
 
     const handleOptimize = async () => {
@@ -58,13 +56,13 @@ export default function IntelligencePanel() {
     return (
         <Paper elevation={3} sx={{ p: 2 }}>
             <Typography variant="body2" sx={{ mb: 1 }}>Intelligence</Typography>
-            <Button fullWidth variant="outlined" sx={{ mb: 1 }} onClick={handleOptimize} disabled={loading || resetLoading || clearUoaLoading}>
+            <Button fullWidth variant="outlined" sx={{ mb: 1 }} onClick={handleOptimize} disabled={loading || resetLoading || clearUoaLoading || isSpectator}>
                 {loading ? <CircularProgress size={24} /> : 'Analyze & Optimize Now'}
             </Button>
-            <Button fullWidth variant="outlined" color="warning" sx={{ mb: 1 }} onClick={handleReset} disabled={loading || resetLoading || clearUoaLoading}>
+            <Button fullWidth variant="outlined" color="warning" sx={{ mb: 1 }} onClick={handleReset} disabled={loading || resetLoading || clearUoaLoading || isSpectator}>
                 {resetLoading ? <CircularProgress size={24} color="inherit" /> : 'Reset to Market Standards'}
             </Button>
-            <Button fullWidth variant="outlined" color="error" onClick={handleClearUoa} disabled={loading || resetLoading || clearUoaLoading}>
+            <Button fullWidth variant="outlined" color="error" onClick={handleClearUoa} disabled={loading || resetLoading || clearUoaLoading || isSpectator}>
                 {clearUoaLoading ? <CircularProgress size={24} color="inherit" /> : 'Clear UOA Watchlist'}
             </Button>
         </Paper>

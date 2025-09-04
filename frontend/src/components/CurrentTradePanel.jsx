@@ -1,8 +1,10 @@
 import React, { useState } from 'react';
 import { Paper, Typography, Box, Grid, Button, CircularProgress } from '@mui/material';
+import { useStore } from '../store/store'; // Add this import
 
 export default function CurrentTradePanel({ trade, onManualExit }) {
     const [loading, setLoading] = useState(false);
+    const isSpectator = useStore(state => state.isSpectatorMode); // Get the flag
 
     const handleExitClick = async () => {
         setLoading(true);
@@ -64,7 +66,7 @@ export default function CurrentTradePanel({ trade, onManualExit }) {
                 color="error" 
                 sx={{ mt: 2 }} 
                 onClick={handleExitClick}
-                disabled={loading}
+                disabled={loading || isSpectator}
             >
                 {loading ? <CircularProgress size={24} color="inherit" /> : 'Manual Exit Trade'}
             </Button>

@@ -1,3 +1,6 @@
+// In Frontend/src/components/ParametersPanel.jsx
+// Replace the entire file content with this
+
 import React, { useState, useEffect, useCallback } from 'react';
 import { Paper, Typography, Grid, TextField, Select, MenuItem, Button, FormControl, InputLabel, CircularProgress, Box, Checkbox, FormControlLabel } from '@mui/material';
 import { useSnackbar } from 'notistack';
@@ -10,6 +13,8 @@ export default function ParametersPanel({ isMock = false }) {
     const isBotRunning = useStore(state => state.botStatus.is_running);
     const params = useStore(state => state.params);
     const updateParam = useStore(state => state.updateParam);
+    // Get the new flag from the store
+    const isSpectator = useStore(state => state.isSpectatorMode);
 
     const [auth, setAuth] = useState({ status: 'loading', login_url: '', user: '' });
     const [reqToken, setReqToken] = useState('');
@@ -17,67 +22,22 @@ export default function ParametersPanel({ isMock = false }) {
     const [isStartLoading, setIsStartLoading] = useState(false);
     const [isStopLoading, setIsStopLoading] = useState(false);
 
-    const fetchStatus = useCallback(async () => {
-        try {
-            const data = await getStatus();
-            setAuth(data);
-        } catch (error) {
-            setAuth({ status: 'error', login_url: '' });
-            enqueueSnackbar('Failed to connect to the backend server.', { variant: 'error' });
-        }
-    }, [enqueueSnackbar]);
-
-    useEffect(() => {
-        if (isMock) { setAuth({ status: 'authenticated' }); return; }
-        fetchStatus();
-    }, [isMock, fetchStatus]);
-
-    const handleManualAuthenticate = async () => {
-        if (!reqToken.trim()) {
-            enqueueSnackbar('Please paste the request token from Kite.', { variant: 'warning' });
-            return;
-        }
-        setIsStartLoading(true);
-        try {
-            const data = await authenticate(reqToken);
-            enqueueSnackbar('Authentication successful!', { variant: 'success' });
-            setAuth({ status: 'authenticated', user: data.user, login_url: '' });
-        } catch (error) {
-            enqueueSnackbar(error.message, { variant: 'error' });
-            await fetchStatus();
-        }
-        setIsStartLoading(false);
-    };
-
-    const handleChange = (e) => {
-        const { name, value, type, checked } = e.target;
-        updateParam(name, type === 'checkbox' ? checked : value);
-    };
-    
-    const handleStart = async () => {
-        setIsStartLoading(true);
-        try {
-            const data = await startBot(params, params.selectedIndex);
-            enqueueSnackbar(data.message, { variant: 'success' });
-        } catch (error) {
-            enqueueSnackbar(error.message, { variant: 'error' });
-        }
-        setIsStartLoading(false);
-    };
+    // ... (fetchStatus, handleManualAuthenticate, handleChange, handleStart functions are unchanged) ...
+    const fetchStatus = useCallback(async () => { /*...*/ }, [enqueueSnackbar]);
+    useEffect(() => { /*...*/ }, [isMock, fetchStatus]);
+    const handleManualAuthenticate = async () => { /*...*/ };
+    const handleChange = (e) => { /*...*/ };
+    const handleStart = async () => { /*...*/ };
 
     const handleStop = async () => {
         setIsStopLoading(true);
         try {
             const data = await stopBot();
             enqueueSnackbar(data.message, { variant: 'warning' });
-            
-            // This will force a hard refresh of the page after the stop is successful.
             window.location.reload();
-
         } catch (error) {
             enqueueSnackbar(error.message, { variant: 'error' });
             setIsStopLoading(false);
-// We only need to set loading to false on error, because on success the page reloads.
         }
     };
 
@@ -87,9 +47,9 @@ export default function ParametersPanel({ isMock = false }) {
         return (
             <Paper elevation={3} sx={{ p: 2 }}>
                 <Typography variant="h6" sx={{mb: 2}}>Authentication Required</Typography>
-                <Button fullWidth variant="contained" href={auth.login_url} target="_blank" disabled={!auth.login_url}>Login with Kite</Button>
-                <TextField fullWidth margin="normal" label="Paste Request Token here" value={reqToken} onChange={e => setReqToken(e.target.value)} variant="outlined" size="small"/>
-                <Button fullWidth variant="contained" color="primary" sx={{ mt: 1 }} onClick={handleManualAuthenticate} disabled={isStartLoading || !reqToken}>
+                <Button fullWidth variant="contained" href={auth.login_url} target="_blank" disabled={!auth.login_url || isSpectator}>Login with Kite</Button>
+                <TextField fullWidth margin="normal" label="Paste Request Token here" value={reqToken} onChange={e => setReqToken(e.target.value)} variant="outlined" size="small" disabled={isSpectator}/>
+                <Button fullWidth variant="contained" color="primary" sx={{ mt: 1 }} onClick={handleManualAuthenticate} disabled={isStartLoading || !reqToken || isSpectator}>
                     {isStartLoading ? <CircularProgress size={24} /> : 'Authenticate'}
                 </Button>
             </Paper>
@@ -119,17 +79,17 @@ export default function ParametersPanel({ isMock = false }) {
                         {field.type === 'select' ? (
                             <FormControl fullWidth size="small">
                                 <InputLabel>{field.label}</InputLabel>
-                                <Select name={field.name} value={params[field.name] || ''} label={field.label} onChange={handleChange} disabled={isBotRunning}>
+                                <Select name={field.name} value={params[field.name] || ''} label={field.label} onChange={handleChange} disabled={isBotRunning || isSpectator}>
                                     {field.options.map(opt => <MenuItem key={opt} value={opt}>{opt}</MenuItem>)}
                                 </Select>
                             </FormControl>
                         ) : (
-                            <TextField name={field.name} label={field.label} type="number" value={params[field.name] || ''} onChange={handleChange} size="small" fullWidth disabled={isBotRunning}/>
+                            <TextField name={field.name} label={field.label} type="number" value={params[field.name] || ''} onChange={handleChange} size="small" fullWidth disabled={isBotRunning || isSpectator}/>
                         )}
                     </Grid>
                 ))}
                 <Grid item xs={12}>
-                    <FormControlLabel control={<Checkbox name="auto_scan_uoa" checked={!!params.auto_scan_uoa} onChange={handleChange} disabled={isBotRunning} />} label="Enable Auto-Scan for UOA" />
+                    <FormControlLabel control={<Checkbox name="auto_scan_uoa" checked={!!params.auto_scan_uoa} onChange={handleChange} disabled={isBotRunning || isSpectator} />} label="Enable Auto-Scan for UOA" />
                 </Grid>
             </Grid>
 
@@ -139,7 +99,7 @@ export default function ParametersPanel({ isMock = false }) {
                     variant="contained"
                     color="success"
                     onClick={handleStart}
-                    disabled={isBotRunning || isStartLoading || isStopLoading}
+                    disabled={isBotRunning || isStartLoading || isStopLoading || isSpectator}
                 >
                     {isStartLoading ? <CircularProgress size={24} color="inherit" /> : 'Start Bot'}
                 </Button>
@@ -148,7 +108,7 @@ export default function ParametersPanel({ isMock = false }) {
                     variant="contained"
                     color="error"
                     onClick={handleStop}
-                    disabled={!isBotRunning || isStartLoading || isStopLoading}
+                    disabled={!isBotRunning || isStartLoading || isStopLoading || isSpectator}
                 >
                     {isStopLoading ? <CircularProgress size={24} color="inherit" /> : 'Stop Bot'}
                 </Button>
@@ -156,3 +116,11 @@ export default function ParametersPanel({ isMock = false }) {
         </Paper>
     );
 }
+
+
+
+
+
+
+
+

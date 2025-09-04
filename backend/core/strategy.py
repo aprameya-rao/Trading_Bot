@@ -250,7 +250,22 @@ class Strategy:
             self.daily_gross_pnl += gross_pnl; self.total_charges += charges; self.daily_net_pnl += net_pnl
             if gross_pnl > 0: self.performance_stats["winning_trades"] += 1; self.daily_profit += gross_pnl; _play_sound(self.manager, "profit")
             else: self.performance_stats["losing_trades"] += 1; self.daily_loss += gross_pnl; _play_sound(self.manager, "loss")
-            log_info = { "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f"), "trigger_reason": p["trigger_reason"], "symbol": p["symbol"], "quantity": p["qty"], "pnl": round(gross_pnl, 2), "entry_price": p["entry_price"], "exit_price": exit_price, "exit_reason": reason, "trend_state": self.data_manager.trend_state, "atr": round(self.data_manager.data_df.iloc[-1]["atr"], 2) if not self.data_manager.data_df.empty else 0, "charges": round(charges, 2), "net_pnl": round(net_pnl, 2) }
+
+            final_pnl = round(gross_pnl, 2)
+            final_charges = round(charges, 2)
+            final_net_pnl = round(net_pnl, 2)
+
+            if not all(isinstance(v, (int, float)) for v in [p["entry_price"], exit_price, final_pnl, final_charges, final_net_pnl]):
+                await self._log_debug("CRITICAL-LOG-FAIL", f"Aborting trade log for {p['symbol']} due to invalid numeric data.")
+                _play_sound(self.manager, "warning")
+                # VERY IMPORTANT: Still reset the state even if logging fails, to prevent the bot from getting stuck.
+                self.position = None
+                self.exit_cooldown_until = datetime.now() + timedelta(seconds=5)
+                await self._update_ui_trade_status()
+                await self._update_ui_performance()
+                return # Abort the function here before logging bad data
+
+            log_info = { "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f"), "trigger_reason": p["trigger_reason"], "symbol": p["symbol"], "quantity": p["qty"], "pnl": final_pnl, "entry_price": p["entry_price"], "exit_price": exit_price, "exit_reason": reason, "trend_state": self.data_manager.trend_state, "atr": round(self.data_manager.data_df.iloc[-1]["atr"], 2) if not self.data_manager.data_df.empty else 0, "charges": final_charges, "net_pnl": final_net_pnl }
             await self.trade_logger.log_trade(log_info)
             await self._log_debug("Database", f"Trade for {p['symbol']} logged successfully.")
             await self.manager.broadcast({"type": "new_trade_log", "payload": log_info})
