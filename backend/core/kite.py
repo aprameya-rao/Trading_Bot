@@ -52,10 +52,19 @@ def generate_session_and_set_token(request_token):
     except Exception as e:
         error_message = f"Authentication failed: {e}"
         print(error_message)
-        # --- FIX: Added the missing return statement here ---
         return False, str(e)
 
-print("--- Attempting to load access token from file on startup. ---")
-saved_token = load_access_token()
-if saved_token:
-    set_access_token(saved_token)
+# --- NEW REUSABLE FUNCTION ---
+def re_initialize_session_from_file():
+    """Loads the access token from the JSON file and sets the session."""
+    print("--- Attempting to initialize session from file... ---")
+    saved_token = load_access_token()
+    if saved_token:
+        # The set_access_token function will print success or failure.
+        set_access_token(saved_token)
+    else:
+        print("--- No valid access token file found. ---")
+
+# --- INITIAL STARTUP CALL ---
+# The application will now call this function when it first starts.
+re_initialize_session_from_file()

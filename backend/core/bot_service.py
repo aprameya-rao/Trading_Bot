@@ -3,6 +3,8 @@ from fastapi import HTTPException
 from .strategy import Strategy
 from .kite_ticker_manager import KiteTickerManager
 from .websocket_manager import manager
+# --- NEW IMPORT ---
+from .kite import re_initialize_session_from_file
 
 class TradingBotService:
     _instance = None
@@ -49,7 +51,6 @@ class TradingBotService:
                 if not self.uoa_scanner_task or self.uoa_scanner_task.done():
                     self.uoa_scanner_task = asyncio.create_task(self.uoa_scanner_worker())
 
-                # --- FIX: Explicitly send the status update BEFORE returning the HTTP response ---
                 await self.strategy_instance._update_ui_status()
                 
                 print("Bot started successfully and ticker is connected.")
@@ -80,9 +81,14 @@ class TradingBotService:
                 "indexPrice": 0, "trend": "---", "indexName": "INDEX"
             }})
 
+            # Forcefully close the WebSocket to the frontend
             await manager.close()
 
-            return {"status": "success", "message": "Bot stopped."}
+            # --- NEW LINE ---
+            # Proactively reload the token from the file to restore the session.
+            re_initialize_session_from_file()
+
+        return {"status": "success", "message": "Bot stopped."}
 
     async def manual_exit_trade(self):
         if not self.strategy_instance:
@@ -111,4 +117,3 @@ class TradingBotService:
 
 async def get_bot_service():
     return await TradingBotService.get_instance()
-
