@@ -7,6 +7,9 @@ import { getStatus, authenticate, startBot, stopBot } from '../services/api';
 export default function ParametersPanel({ isMock = false }) {
     const { enqueueSnackbar } = useSnackbar();
     
+    // ADDED: Get the spectator flag from the store
+    const isSpectator = useStore(state => state.isSpectatorMode);
+    
     const isBotRunning = useStore(state => state.botStatus.is_running);
     const params = useStore(state => state.params);
     const updateParam = useStore(state => state.updateParam);
@@ -70,15 +73,11 @@ export default function ParametersPanel({ isMock = false }) {
             try {
                 const data = await stopBot();
                 enqueueSnackbar(data.message, { variant: 'warning' });
-                
-                // --- MODIFIED LINE ---
-                // Instead of reloading, just reset the store's state.
                 useStore.getState().resetRealtimeData();
-
             } catch (error) {
                 enqueueSnackbar(error.message, { variant: 'error' });
             }
-            setIsStopLoading(false); // We need this again now
+            setIsStopLoading(false);
     };
     if (auth.status === 'loading') return <Paper sx={{ p: 2, textAlign: 'center' }}><CircularProgress /></Paper>;
     
@@ -118,17 +117,20 @@ export default function ParametersPanel({ isMock = false }) {
                         {field.type === 'select' ? (
                             <FormControl fullWidth size="small">
                                 <InputLabel>{field.label}</InputLabel>
-                                <Select name={field.name} value={params[field.name] || ''} label={field.label} onChange={handleChange} disabled={isBotRunning}>
+                                {/* CHANGED: Added isSpectator to disabled prop */}
+                                <Select name={field.name} value={params[field.name] || ''} label={field.label} onChange={handleChange} disabled={isBotRunning || isSpectator}>
                                     {field.options.map(opt => <MenuItem key={opt} value={opt}>{opt}</MenuItem>)}
                                 </Select>
                             </FormControl>
                         ) : (
-                            <TextField name={field.name} label={field.label} type="number" value={params[field.name] || ''} onChange={handleChange} size="small" fullWidth disabled={isBotRunning}/>
+                            // CHANGED: Added isSpectator to disabled prop
+                            <TextField name={field.name} label={field.label} type="number" value={params[field.name] || ''} onChange={handleChange} size="small" fullWidth disabled={isBotRunning || isSpectator}/>
                         )}
                     </Grid>
                 ))}
                 <Grid item xs={12}>
-                    <FormControlLabel control={<Checkbox name="auto_scan_uoa" checked={!!params.auto_scan_uoa} onChange={handleChange} disabled={isBotRunning} />} label="Enable Auto-Scan for UOA" />
+                    {/* CHANGED: Added isSpectator to disabled prop */}
+                    <FormControlLabel control={<Checkbox name="auto_scan_uoa" checked={!!params.auto_scan_uoa} onChange={handleChange} disabled={isBotRunning || isSpectator} />} label="Enable Auto-Scan for UOA" />
                 </Grid>
             </Grid>
             <Box sx={{ mt: 2, display: 'flex', gap: 1 }}>
@@ -137,7 +139,8 @@ export default function ParametersPanel({ isMock = false }) {
                     variant="contained"
                     color="success"
                     onClick={handleStart}
-                    disabled={isBotRunning || isStartLoading || isStopLoading}
+                    // CHANGED: Added isSpectator to disabled prop
+                    disabled={isBotRunning || isStartLoading || isStopLoading || isSpectator}
                 >
                     {isStartLoading ? <CircularProgress size={24} color="inherit" /> : 'Start Bot'}
                 </Button>
@@ -146,7 +149,8 @@ export default function ParametersPanel({ isMock = false }) {
                     variant="contained"
                     color="error"
                     onClick={handleStop}
-                    disabled={!isBotRunning || isStartLoading || isStopLoading}
+                    // CHANGED: Added isSpectator to disabled prop
+                    disabled={!isBotRunning || isStartLoading || isStopLoading || isSpectator}
                 >
                     {isStopLoading ? <CircularProgress size={24} color="inherit" /> : 'Stop Bot'}
                 </Button>
