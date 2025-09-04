@@ -168,7 +168,7 @@ class UoaEntryStrategy(BaseEntryStrategy):
                 await self.strategy._log_debug("UOA Trigger", f"REJECTED: {symbol} price {current_price} is not above its 1-min open {option_candle['open']}.")
                 continue
                 
-            opt = self.strategy.get_entry_option(side)
+            opt = self.strategy.get_entry_option(side)  
             
             if await self._validate_entry_conditions(side, opt):
                 del self.strategy.uoa_watchlist[token]
