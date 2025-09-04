@@ -170,14 +170,14 @@ class UoaEntryStrategy(BaseEntryStrategy):
                 
             opt = self.strategy.get_entry_option(side)  
             
-            if await self._validate_entry_conditions(side, opt):
+            if await self._validate_entry_conditions1(side, opt):
                 del self.strategy.uoa_watchlist[token]
                 await self.strategy._update_ui_uoa_list()
                 return side, "UOA_Entry", opt
         
         return None, None, None
 
-    async def _validate_entry_conditions(self, side, opt):
+    async def _validate_entry_conditions1(self, side, opt):
         """
         Overridden validation for UOA with detailed step-by-step logging.
         It bypasses '_is_opposite_falling' AND '_is_accelerating' checks.
