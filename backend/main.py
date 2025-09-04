@@ -47,8 +47,19 @@ class WatchlistRequest(BaseModel): side: str; strike: int
 
 @app.get("/api/status")
 async def get_status():
+    # Check if the global access_token variable exists first
     if access_token:
-        return {"status": "authenticated", "user": kite.profile()['user_id']}
+        try:
+            # Actively VERIFY the token by making a network API call.
+            profile = await asyncio.to_thread(kite.profile)
+            # If the call succeeds, we are truly authenticated.
+            return {"status": "authenticated", "user": profile.get('user_id')}
+        except Exception:
+            # If kite.profile() fails, it means the token is invalid.
+            # We catch the error and fall through to the unauthenticated response.
+            pass
+    
+    # This is the fallback for BOTH "no token" and "invalid token" cases.
     return {"status": "unauthenticated", "login_url": kite.login_url()}
 
 @app.post("/api/authenticate")
