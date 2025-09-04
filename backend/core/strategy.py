@@ -367,16 +367,25 @@ class Strategy:
         if self.position is not None or self.daily_trade_limit_hit: return
         if self.exit_cooldown_until and datetime.now() < self.exit_cooldown_until: return
         if self.trades_this_minute >= 2: return
+        
         daily_sl, daily_pt = self.params.get("daily_sl", 0), self.params.get("daily_pt", 0)
         if (daily_sl < 0 and self.daily_net_pnl <= daily_sl) or (daily_pt > 0 and self.daily_net_pnl >= daily_pt):
-            self.daily_trade_limit_hit = True; await self._log_debug("RISK", "Daily Net SL/PT hit. Trading disabled."); return
+            self.daily_trade_limit_hit = True
+            await self._log_debug("RISK", "Daily Net SL/PT hit. Trading disabled.")
+            return
+
         if await self._check_pending_reversal_entry(): return
+
+        # --- THIS IS THE CORRECTED LOOP ---
         for entry_strategy in self.entry_strategies:
-            side, reason = await entry_strategy.check()
-            if side and reason:
-                if opt := self.get_entry_option(side):
-                    await self.take_trade(reason, opt)
-                    return
+            # It now correctly receives all THREE values
+            side, reason, opt = await entry_strategy.check()
+            
+            # It now correctly checks for all three values and uses the 'opt' that was validated
+            if side and reason and opt:
+                await self.take_trade(reason, opt)
+                return # Exit the function once a trade is taken
+                
         self._set_pending_reversal_signal()
         
     async def on_ticker_connect(self):

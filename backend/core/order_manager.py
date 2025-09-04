@@ -27,7 +27,6 @@ class OrderManager:
                         order_type=kite.ORDER_TYPE_MARKET,
                         product=kite.PRODUCT_MIS,
                         transaction_type=transaction_type,
-                        autoslice=True,
                         **kwargs
                     )
                 
