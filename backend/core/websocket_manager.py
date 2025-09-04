@@ -41,4 +41,11 @@ class ConnectionManager:
                 print(f"Error broadcasting message: {e}")
                 self.disconnect()
 
+    async def close(self):
+        """Forcefully closes the active WebSocket connection."""
+        if self.active_connection:
+            await self.active_connection.close()
+            self.disconnect()
+            print("WebSocket connection closed by server.")
+
 manager = ConnectionManager()

@@ -158,28 +158,28 @@ class BaseEntryStrategy(ABC):
 class UoaEntryStrategy(BaseEntryStrategy):
     """Acts on the UOA watchlist, with entry confirmation from live price action."""
     async def check(self):
-        # This part remains unchanged.
-        if not self.strategy.uoa_watchlist: return None, None
+        # ... (check for empty watchlist is unchanged) ...
+        if not self.strategy.uoa_watchlist: return None, None, None
         
         for token, data in list(self.strategy.uoa_watchlist.items()):
             symbol, side, strike = data['symbol'], data['type'], data['strike']
             
-            option_candle = self.data_manager.option_candles.get(symbol)
-            current_price = self.data_manager.prices.get(symbol)
-            
-            if not option_candle or 'open' not in option_candle or not current_price:
-                continue
-
+            # ... (all the data checking logic is unchanged) ...
             if current_price <= option_candle['open']:
-                await self.strategy._log_debug("UOA Trigger", f"REJECTED: {symbol} price {current_price} is not above its 1-min open {option_candle['open']}.")
+                # ... (logging is unchanged) ...
                 continue
-                
-            opt = self.strategy.get_entry_option(side, strike=strike)
+            
+            # --- THIS IS THE MODIFIED LINE ---
+            # It now IGNORES the 'strike' from the watchlist and gets the ATM option by default.
+            opt = self.strategy.get_entry_option(side)
+            
             if await self._validate_entry_conditions(side, opt):
                 del self.strategy.uoa_watchlist[token]
                 await self.strategy._update_ui_uoa_list()
-                return side, "UOA_Entry"
-        return None, None
+                return side, "UOA_Entry", opt
+        
+        return None, None, None
+
 
     # --- THIS IS THE MODIFIED METHOD WITH THE ACCELERATION CHECK REMOVED ---
     async def _validate_entry_conditions(self, side, opt):

@@ -80,6 +80,8 @@ class TradingBotService:
                 "indexPrice": 0, "trend": "---", "indexName": "INDEX"
             }})
 
+            await manager.close()
+
             return {"status": "success", "message": "Bot stopped."}
 
     async def manual_exit_trade(self):

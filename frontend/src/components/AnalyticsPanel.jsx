@@ -93,7 +93,7 @@ export default function AnalyticsPanel({ scope = 'all' }) {
     return (
         <Box>
             <Grid container spacing={2} sx={{ mb: 2 }}>
-                <StatBox title="Total Net P&L" value={`₹${summary.totalPnl.toFixed(2)}`} />
+                <StatBox title="Total Gross P&L" value={`₹${summary.totalPnl.toFixed(2)}`} />
                 <StatBox title="Profit Factor" value={summary.profitFactor.toFixed(2)} />
                 <StatBox title="Total Trades" value={summary.totalTrades} />
                 <StatBox title="Win Rate" value={`${summary.winRate.toFixed(1)}%`} />
