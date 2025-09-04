@@ -35,7 +35,7 @@ app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allows connections from any device on your network
+    allow_origins=["*"],  # This is the key change
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

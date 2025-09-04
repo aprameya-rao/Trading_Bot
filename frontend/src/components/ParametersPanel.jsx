@@ -7,16 +7,13 @@ import { getStatus, authenticate, startBot, stopBot } from '../services/api';
 export default function ParametersPanel({ isMock = false }) {
     const { enqueueSnackbar } = useSnackbar();
     
-    // --- Get state from the Zustand store ---
     const isBotRunning = useStore(state => state.botStatus.is_running);
     const params = useStore(state => state.params);
     const updateParam = useStore(state => state.updateParam);
 
-    // --- Local state for this component ---
     const [auth, setAuth] = useState({ status: 'loading', login_url: '', user: '' });
     const [reqToken, setReqToken] = useState('');
     
-    // NEW: Separate loading states for each button
     const [isStartLoading, setIsStartLoading] = useState(false);
     const [isStopLoading, setIsStopLoading] = useState(false);
 
@@ -36,12 +33,11 @@ export default function ParametersPanel({ isMock = false }) {
     }, [isMock, fetchStatus]);
 
     const handleManualAuthenticate = async () => {
-        // This function remains unchanged
         if (!reqToken.trim()) {
             enqueueSnackbar('Please paste the request token from Kite.', { variant: 'warning' });
             return;
         }
-        setIsStartLoading(true); // Use start loading for auth as well
+        setIsStartLoading(true);
         try {
             const data = await authenticate(reqToken);
             enqueueSnackbar('Authentication successful!', { variant: 'success' });
@@ -58,7 +54,6 @@ export default function ParametersPanel({ isMock = false }) {
         updateParam(name, type === 'checkbox' ? checked : value);
     };
     
-    // NEW: Separate handler for the Start action
     const handleStart = async () => {
         setIsStartLoading(true);
         try {
@@ -70,22 +65,25 @@ export default function ParametersPanel({ isMock = false }) {
         setIsStartLoading(false);
     };
 
-    // NEW: Separate handler for the Stop action
     const handleStop = async () => {
         setIsStopLoading(true);
         try {
             const data = await stopBot();
             enqueueSnackbar(data.message, { variant: 'warning' });
+            
+            // This will force a hard refresh of the page after the stop is successful.
+            window.location.reload();
+
         } catch (error) {
             enqueueSnackbar(error.message, { variant: 'error' });
+            setIsStopLoading(false);
+// We only need to set loading to false on error, because on success the page reloads.
         }
-        setIsStopLoading(false);
     };
 
 
     if (auth.status === 'loading') return <Paper sx={{ p: 2, textAlign: 'center' }}><CircularProgress /></Paper>;
     if (auth.status !== 'authenticated') {
-        // Authentication UI is unchanged
         return (
             <Paper elevation={3} sx={{ p: 2 }}>
                 <Typography variant="h6" sx={{mb: 2}}>Authentication Required</Typography>
@@ -135,7 +133,6 @@ export default function ParametersPanel({ isMock = false }) {
                 </Grid>
             </Grid>
 
-            {/* CHANGED: Replaced single button with a Box containing two buttons */}
             <Box sx={{ mt: 2, display: 'flex', gap: 1 }}>
                 <Button
                     fullWidth
