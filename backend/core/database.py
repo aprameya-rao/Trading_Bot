@@ -2,16 +2,19 @@ import os
 from sqlalchemy import create_engine, text
 from sqlalchemy.pool import QueuePool
 
-# --- THIS IS THE FIX: Use absolute paths to prevent process ambiguity ---
-# Get the directory where this script is located
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# --- THIS IS THE FIX: Use the parent directory of 'core' ---
+# Get the directory where this script ('database.py') is located, which is the 'core' folder
+CORE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Get the parent directory of 'core', which is the 'backend' root folder
+BASE_DIR = os.path.dirname(CORE_DIR)
 
 # Define the database file names
 TODAY_DB_NAME = "trading_data_today.db"
 ALL_DB_NAME = "trading_data_all.db"
 
 # Create the full, absolute paths to the database files
-# os.path.join will correctly place them in the 'core' directory with this script
+# os.path.join will now place them in the 'backend' root directory
 TODAY_DB_PATH = os.path.join(BASE_DIR, TODAY_DB_NAME)
 ALL_DB_PATH = os.path.join(BASE_DIR, ALL_DB_NAME)
 
@@ -38,5 +41,3 @@ all_engine = create_engine(
 
 # Export the 'text' function for convenience
 sql_text = text
-
-# --- You can now remove the temporary debug prints from the previous step ---
