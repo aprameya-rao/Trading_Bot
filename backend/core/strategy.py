@@ -55,7 +55,7 @@ class Strategy:
             self.config["name"], self.config["token"], self.config["symbol"], self.config["strike_step"], self.config["exchange"]
 
         self.trend_candle_count = 0
-        self.pending_steep_signal = None
+        
 
         self.data_manager = DataManager(self.index_token, self.index_symbol, self.STRATEGY_PARAMS, self._log_debug, self.on_trend_update)
         self.risk_manager = RiskManager(self.params, self._log_debug)
@@ -97,7 +97,6 @@ class Strategy:
         self.performance_stats = {"total_trades": 0, "winning_trades": 0, "losing_trades": 0}
         self.exit_cooldown_until: Optional[datetime] = None; self.disconnected_since: Optional[datetime] = None
         self.next_partial_profit_level = 1; self.trend_candle_count = 0
-        self.pending_steep_signal = None
 
     async def _restore_daily_performance(self):
         # ... (This function is unchanged)
@@ -363,29 +362,8 @@ class Strategy:
                         await self.evaluate_exit_logic()
         except Exception as e: await self._log_debug("Tick Handler Error", f"Critical error: {e}")
 
-    async def _check_pending_reversal_entry(self):
-        # ... (This function is unchanged)
-        if not self.pending_steep_signal: return False
-        signal_to_check = self.pending_steep_signal; self.pending_steep_signal = None
-        side, reason = signal_to_check['side'], signal_to_check['reason']
-        opt = self.get_entry_option(side)
-        if opt and self.entry_strategies:
-            validator = self.entry_strategies[0]
-            if await validator._validate_entry_conditions(side, opt):
-                await self.take_trade(reason, opt); return True
-        return False
-
-    def _set_pending_reversal_signal(self):
-        # ... (This function is unchanged)
-        if len(self.data_manager.data_df) < 1: return
-        last = self.data_manager.data_df.iloc[-1]; is_bullish_candle = last['close'] > last['open']
-        if last['wma'] > last['sma'] and not is_bullish_candle:
-            self.pending_steep_signal = {'side': 'PE', 'reason': 'Reversal_PE'}
-        elif last['wma'] < last['sma'] and is_bullish_candle:
-            self.pending_steep_signal = {'side': 'CE', 'reason': 'Reversal_CE'}
-        else: self.pending_steep_signal = None
-
     async def check_trade_entry(self):
+        # --- SIMPLIFIED: Removed calls to the pending reversal functions ---
         if self.position is not None or self.daily_trade_limit_hit: return
         if self.exit_cooldown_until and datetime.now() < self.exit_cooldown_until: return
         if self.trades_this_minute >= 2: return
@@ -396,15 +374,11 @@ class Strategy:
             await self._log_debug("RISK", "Daily Net SL/PT hit. Trading disabled.")
             return
 
-        if await self._check_pending_reversal_entry(): return
-
         for entry_strategy in self.entry_strategies:
             side, reason, opt = await entry_strategy.check()
             if side and reason and opt:
                 await self.take_trade(reason, opt)
                 return
-                
-        self._set_pending_reversal_signal()
         
     async def on_ticker_connect(self):
         # ... (This function is unchanged)
