@@ -196,7 +196,7 @@ class Strategy:
             except asyncio.CancelledError: await self._log_debug("UI Updater", "Task cancelled."); break
             except Exception as e: await self._log_debug("UI Updater Error", f"An error occurred: {e}"); await asyncio.sleep(5)
 
-    async def take_trade(self, trigger, opt):
+    async def take_trade(self, trigger, opt,reason):
         async with self.position_lock:
             if self.position or not opt: return
         
@@ -256,7 +256,7 @@ class Strategy:
                         await self._log_debug("CRITICAL-ENTRY-FAIL", f"Order failed: {e}. Aborting further orders.")
                         break
                 else:
-                     await self._log_debug("PAPER TRADE", f"Simulating BUY for {order_qty} of {symbol}")
+                     await self._log_debug("PAPER TRADE", f"Simulating BUY for {order_qty} of {symbol}.Reason:{reason}")
                      total_filled_qty += order_qty
 
                 if len(orders_to_place) > 1 and i < len(orders_to_place) - 1:
