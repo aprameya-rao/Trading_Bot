@@ -179,27 +179,31 @@ class Strategy:
             if self.position or not opt: return
         
         instrument_token = opt.get("instrument_token")
-        symbol, side, current_price, lot_size = opt["tradingsymbol"], opt["instrument_type"], self.data_manager.prices.get(opt["tradingsymbol"]), opt.get("lot_size")
+        symbol = opt["tradingsymbol"]
         
-        qty, initial_sl_price = self.risk_manager.calculate_trade_details(current_price, lot_size)
-        if qty is None or instrument_token is None or current_price is None or current_price <= 0: 
-            await self._log_debug("Trade Rejected", f"Invalid trade details: Qty={qty}, Token={instrument_token}, Price={current_price}")
+        current_price = self.data_manager.prices.get(symbol)
+        if current_price is None or current_price <= 0: 
+            await self._log_debug("Trade Rejected", f"Invalid live price for {symbol}: {current_price}")
+            return
+
+        side, lot_size = opt["instrument_type"], opt.get("lot_size")
+        
+        available_cash = None
+        if self.params.get("trading_mode") == "Live Trading":
+            try:
+                margins = await asyncio.to_thread(kite.margins)
+                available_cash = margins['equity']['available']['cash']
+            except Exception as e:
+                await self._log_debug("API_ERROR", f"Could not fetch margins, aborting trade: {e}")
+                return
+
+        qty, initial_sl_price = self.risk_manager.calculate_trade_details(current_price, lot_size, available_cash)
+        
+        if qty is None or instrument_token is None: 
+            await self._log_debug("Trade Rejected", "Could not calculate quantity. Check risk/capital parameters.")
             return
 
         try:
-            required_margin = qty * current_price
-            if self.params.get("trading_mode") == "Live Trading":
-                try:
-                    margins = await asyncio.to_thread(kite.margins)
-                    available_cash = margins['equity']['available']['cash']
-                    if required_margin > available_cash:
-                        await self._log_debug("Margin Check", f"FAIL: Insufficient funds. Required: {required_margin:.2f}, Available: {available_cash:.2f}")
-                        return
-                    await self._log_debug("Margin Check", f"PASS: Required: {required_margin:.2f}, Available: {available_cash:.2f}")
-                except Exception as e:
-                    await self._log_debug("API_ERROR", f"Could not fetch margins: {e}")
-                    return
-
             max_lots_per_order = self.params.get('max_lots_per_order', 1800)
             orders_to_place = []
             remaining_qty = qty
@@ -212,9 +216,11 @@ class Strategy:
             for i, order_qty in enumerate(orders_to_place):
                 if len(orders_to_place) > 1:
                     await self._log_debug("Order Slicing", f"Placing child order {i+1}/{len(orders_to_place)} for {order_qty} units.")
+                
                 order_type = kite.ORDER_TYPE_MARKET; limit_price = None
                 if self.params.get("order_type") == "LIMIT":
-                    order_type = kite.ORDER_TYPE_LIMIT; slippage_pct = self.params.get('limit_order_slippage_pct', 0.5)
+                    order_type = kite.ORDER_TYPE_LIMIT
+                    slippage_pct = self.params.get('limit_order_slippage_pct', 0.5)
                     limit_price = _round_to_tick(current_price * (1 + slippage_pct / 100))
 
                 if self.params.get("trading_mode") == "Live Trading":
