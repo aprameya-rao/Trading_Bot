@@ -21,7 +21,7 @@ from .entry_strategies import (
     RsiImmediateEntryStrategy,
     MaCrossoverStrategy,
     CandlePatternEntryStrategy,
-    RecoveryEntryStrategy  # ADDED
+    RecoveryEntryStrategy
 )
 
 if TYPE_CHECKING:
@@ -64,7 +64,6 @@ class Strategy:
         self.trade_logger = TradeLogger(self.db_lock)
         self.order_manager = OrderManager(self._log_debug)
 
-        # MODIFIED: Added RecoveryEntryStrategy
         strategy_map = {
             "RECOVERY": RecoveryEntryStrategy,
             "INTRA_CANDLE": IntraCandlePatternStrategy, "UOA": UoaEntryStrategy,
@@ -117,7 +116,8 @@ class Strategy:
         self.token_to_symbol = {self.index_token: self.index_symbol}; self.uoa_watchlist = {}
         self.performance_stats = {"total_trades": 0, "winning_trades": 0, "losing_trades": 0}
         self.exit_cooldown_until: Optional[datetime] = None; self.disconnected_since: Optional[datetime] = None
-        self.last_exit_info = None  # ADDED: For recovery signal
+        self.last_exit_info = None
+        self.straddle_data = {}
         self.next_partial_profit_level = 1; self.trend_candle_count = 0
         self.pending_steep_signal = None
 
@@ -191,13 +191,12 @@ class Strategy:
                     await self._update_ui_status()
                     await self._update_ui_option_chain()
                     await self._update_ui_chart_data()
-                    await self._update_ui_straddle_monitor() # ADDED
+                    await self._update_ui_straddle_monitor()
                 await asyncio.sleep(1)
             except asyncio.CancelledError: await self._log_debug("UI Updater", "Task cancelled."); break
             except Exception as e: await self._log_debug("UI Updater Error", f"An error occurred: {e}"); await asyncio.sleep(5)
 
-    # REPLACED: Overhauled take_trade function
-    async def take_trade(self, trigger, opt,reason):
+    async def take_trade(self, trigger, opt):
         async with self.position_lock:
             if self.position or not opt: return
         
@@ -212,7 +211,6 @@ class Strategy:
         try:
             required_margin = qty * current_price
 
-            # 1. Pre-Trade Margin Check
             if self.params.get("trading_mode") == "Live Trading":
                 try:
                     margins = await asyncio.to_thread(kite.margins)
@@ -225,8 +223,7 @@ class Strategy:
                     await self._log_debug("API_ERROR", f"Could not fetch margins: {e}")
                     return
 
-            # 2. Order Slicing Logic
-            max_lots_per_order = self.params.get('max_lots_per_order', lot_size * 100) # Default to 100 lots
+            max_lots_per_order = self.params.get('max_lots_per_order', 1800)
             orders_to_place = []
             remaining_qty = qty
             while remaining_qty > 0:
@@ -234,7 +231,6 @@ class Strategy:
                 orders_to_place.append(order_qty)
                 remaining_qty -= order_qty
 
-            # 3. Order Placement Loop
             total_filled_qty = 0
             for i, order_qty in enumerate(orders_to_place):
                 if len(orders_to_place) > 1:
@@ -260,7 +256,7 @@ class Strategy:
                         await self._log_debug("CRITICAL-ENTRY-FAIL", f"Order failed: {e}. Aborting further orders.")
                         break
                 else:
-                     await self._log_debug("PAPER TRADE", f"Simulating BUY for {order_qty} of {symbol}.Reason {reason}")
+                     await self._log_debug("PAPER TRADE", f"Simulating BUY for {order_qty} of {symbol}")
                      total_filled_qty += order_qty
 
                 if len(orders_to_place) > 1 and i < len(orders_to_place) - 1:
@@ -288,7 +284,6 @@ class Strategy:
         if not self.position: return
         p = self.position; exit_price = self.data_manager.prices.get(p["symbol"], p["max_price"])
         
-        # MODIFIED: Logic to store info on stopped-out trades
         if reason == "Trailing SL":
             opt_details = next((o for o in self.option_instruments if o['tradingsymbol'] == p['symbol']), None)
             if opt_details:
@@ -443,8 +438,11 @@ class Strategy:
         else:
             self.pending_steep_signal = None
 
-    # REPLACED: Overhauled entry checking logic
     async def check_trade_entry(self):
+        straddle_change_pct = self.straddle_data.get('change_pct', 0)
+        if abs(straddle_change_pct) > 25.0:
+            return 
+            
         if self.position is not None or self.daily_trade_limit_hit: return
         if self.exit_cooldown_until and datetime.now() < self.exit_cooldown_until: return
         if self.trades_this_minute >= 2: return
@@ -457,7 +455,6 @@ class Strategy:
 
         if await self._check_pending_reversal_entry(): return
 
-        # Check for recovery signal first, as it's a special case
         recovery_strategy = next((s for s in self.entry_strategies if isinstance(s, RecoveryEntryStrategy)), None)
         if recovery_strategy:
             side, reason, opt = await recovery_strategy.check()
@@ -465,9 +462,8 @@ class Strategy:
                 await self.take_trade(reason, opt)
                 return
 
-        # If no recovery signal, check the other strategies in their defined priority
         for entry_strategy in self.entry_strategies:
-            if isinstance(entry_strategy, RecoveryEntryStrategy): continue # Skip recovery here
+            if isinstance(entry_strategy, RecoveryEntryStrategy): continue
             side, reason, opt = await entry_strategy.check()
             if side and reason and opt:
                 await self.take_trade(reason, opt)
@@ -518,7 +514,6 @@ class Strategy:
                 data.append({"strike": p["strike"], "ce_ltp": self.data_manager.prices.get(ce_symbol, "--") if ce_symbol else "--", "pe_ltp": self.data_manager.prices.get(pe_symbol, "--") if pe_symbol else "--"})
         await self.manager.broadcast({"type": "option_chain_update", "payload": data})
 
-    # ADDED: New method for straddle monitor
     async def _update_ui_straddle_monitor(self):
         payload = {"current_straddle": 0, "open_straddle": 0, "change_pct": 0}
         spot = self.data_manager.prices.get(self.index_symbol)
@@ -542,7 +537,8 @@ class Strategy:
                 open_straddle = ce_open + pe_open
                 change_pct = ((current_straddle / open_straddle) - 1) * 100 if open_straddle > 0 else 0
                 payload = {"current_straddle": current_straddle, "open_straddle": open_straddle, "change_pct": change_pct}
-
+        
+        self.straddle_data = payload
         await self.manager.broadcast({"type": "straddle_update", "payload": payload})
 
     async def _update_ui_chart_data(self):
@@ -657,7 +653,12 @@ class Strategy:
     def _sanitize_params(self, params):
         p = params.copy()
         try:
-            for key in ["start_capital", "trailing_sl_points", "trailing_sl_percent", "daily_sl", "daily_pt", "partial_profit_pct", "partial_exit_pct", "risk_per_trade_percent", "recovery_threshold_pct", "max_lots_per_order"]:
+            keys_to_convert = [
+                "start_capital", "trailing_sl_points", "trailing_sl_percent", 
+                "daily_sl", "daily_pt", "partial_profit_pct", "partial_exit_pct", 
+                "risk_per_trade_percent", "recovery_threshold_pct", "max_lots_per_order"
+            ]
+            for key in keys_to_convert:
                 if key in p and p[key]: p[key] = float(p[key])
         except (ValueError, TypeError) as e: print(f"Warning: Could not convert a parameter to a number: {e}")
         return p

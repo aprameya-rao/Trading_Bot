@@ -7,7 +7,7 @@ from abc import ABC, abstractmethod
 from datetime import datetime, timedelta
 
 # ==============================================================================
-# SECTION 1: CANDLESTICK PATTERN HELPER FUNCTIONS (Unchanged)
+# SECTION 1: CANDLESTICK PATTERN HELPER FUNCTIONS
 # ==============================================================================
 
 def is_bullish_engulfing(prev, last):
@@ -64,11 +64,11 @@ def is_doji(c, tol=0.05):
     return (body / rng) < tol
 
 # ==============================================================================
-# SECTION 2: BASE CLASS AND ALL ENTRY STRATEGIES (Updated)
+# SECTION 2: BASE CLASS AND ALL ENTRY STRATEGIES
 # ==============================================================================
 
 class BaseEntryStrategy(ABC):
-    """Base class with the new unified validation gauntlet from the original script."""
+    """Base class for all entry strategies."""
     def __init__(self, strategy_instance):
         self.strategy = strategy_instance
         self.params = strategy_instance.params
@@ -114,7 +114,6 @@ class BaseEntryStrategy(ABC):
         if history[-1] < history[-2]:
             return True
         
-        # await self.strategy._log_debug("Trade Rejected", f"Opposite option {opposite_symbol} is not falling.")
         return False
 
     def _momentum_ok(self, side, opt_sym, look=3):
@@ -166,10 +165,9 @@ class UoaEntryStrategy(BaseEntryStrategy):
                 continue
 
             if current_price <= option_candle['open']:
-                await self.strategy._log_debug("UOA Trigger", f"REJECTED: {symbol} price {current_price} is not above its 1-min open {option_candle['open']}.")
                 continue
                 
-            opt = self.strategy.get_entry_option(side)  
+            opt = self.strategy.get_entry_option(side, strike)
             
             if await self._validate_entry_conditions1(side, opt):
                 del self.strategy.uoa_watchlist[token]
@@ -179,29 +177,10 @@ class UoaEntryStrategy(BaseEntryStrategy):
         return None, None, None
 
     async def _validate_entry_conditions1(self, side, opt):
-        """
-        Overridden validation for UOA with detailed step-by-step logging.
-        It bypasses '_is_opposite_falling' AND '_is_accelerating' checks.
-        """
-        if not opt:
-            return False
-
+        if not opt: return False
         symbol = opt['tradingsymbol']
-        log_report = []
-
-        is_rising = self.data_manager.is_price_rising(symbol)
-        log_report.append(f"Price Rising: {is_rising}")
-        if not is_rising:
-            await self.strategy._log_debug("UOA Validation", f"REJECTED {symbol} | Report: [{', '.join(log_report)}]")
-            return False
-
-        momentum_is_ok = self._momentum_ok(side, symbol)
-        log_report.append(f"Momentum OK: {momentum_is_ok}")
-        if not momentum_is_ok:
-            await self.strategy._log_debug("UOA Validation", f"REJECTED {symbol} | Report: [{', '.join(log_report)}]")
-            return False
-        
-        await self.strategy._log_debug("UOA Validation", f"PASS {symbol} | Report: [{', '.join(log_report)}]")
+        if not self.data_manager.is_price_rising(symbol): return False
+        if not self._momentum_ok(side, symbol): return False
         return True
 
 class TrendContinuationStrategy(BaseEntryStrategy):
@@ -252,7 +231,7 @@ class MaCrossoverStrategy(BaseEntryStrategy):
         return None, None, None
 
 class CandlePatternEntryStrategy(BaseEntryStrategy):
-    """NEW: Enters on a Doji reversal pattern after a sustained trend."""
+    """Enters on a Doji reversal pattern after a sustained trend."""
     async def check(self):
         df = self.data_manager.data_df
         if len(df) < 3 or not self.data_manager.trend_state:
@@ -334,19 +313,14 @@ class IntraCandlePatternStrategy(BaseEntryStrategy):
                 return side, pattern, opt
             
         return None, None, None
-    
-
 
 class RecoveryEntryStrategy(BaseEntryStrategy):
-    """
-    Checks if a recently stopped-out trade has recovered enough to be re-entered.
-    """
+    """Checks if a recently stopped-out trade has recovered enough to be re-entered."""
     async def check(self):
         last_exit = self.strategy.last_exit_info
         
-        # Check if there's a valid candidate for recovery
         if not last_exit or datetime.now() - last_exit['time'] > timedelta(minutes=2):
-            if last_exit: self.strategy.last_exit_info = None # Clear stale info
+            if last_exit: self.strategy.last_exit_info = None
             return None, None, None
 
         current_price = self.data_manager.prices.get(last_exit['symbol'])
@@ -358,13 +332,10 @@ class RecoveryEntryStrategy(BaseEntryStrategy):
 
         if current_price >= recovery_price:
             await self.strategy._log_debug("Signal", f"Recovery signal for {last_exit['symbol']}!")
-            # Find the full instrument data for the option
             opt = next((o for o in self.strategy.option_instruments if o['tradingsymbol'] == last_exit['symbol']), None)
             
-            # Important: Clear the info so it doesn't trigger again
             self.strategy.last_exit_info = None
             
-            # We skip the standard validation gauntlet for this special re-entry
             if opt:
                 return last_exit['side'], "Recovery", opt
 
