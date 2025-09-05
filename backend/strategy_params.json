@@ -20,4 +20,5 @@
     "atr_period": 14,
     "min_atr_value": 4,
     "ma_gap_threshold_pct": 0.05
+    
 }

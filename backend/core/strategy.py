@@ -196,7 +196,7 @@ class Strategy:
             except asyncio.CancelledError: await self._log_debug("UI Updater", "Task cancelled."); break
             except Exception as e: await self._log_debug("UI Updater Error", f"An error occurred: {e}"); await asyncio.sleep(5)
 
-    async def take_trade(self, trigger, opt,reason):
+    async def take_trade(self, trigger, opt):
         async with self.position_lock:
             if self.position or not opt: return
         
@@ -256,7 +256,7 @@ class Strategy:
                         await self._log_debug("CRITICAL-ENTRY-FAIL", f"Order failed: {e}. Aborting further orders.")
                         break
                 else:
-                     await self._log_debug("PAPER TRADE", f"Simulating BUY for {order_qty} of {symbol}.Reason :{reason}")
+                     await self._log_debug("PAPER TRADE", f"Simulating BUY for {order_qty} of {symbol}")
                      total_filled_qty += order_qty
 
                 if len(orders_to_place) > 1 and i < len(orders_to_place) - 1:
@@ -440,7 +440,8 @@ class Strategy:
 
     async def check_trade_entry(self):
         straddle_change_pct = self.straddle_data.get('change_pct', 0)
-        if abs(straddle_change_pct) > 25.0:
+        vol_circuit_breaker = self.params.get('vol_circuit_breaker_pct', 25.0)
+        if abs(straddle_change_pct) > vol_circuit_breaker:
             return 
             
         if self.position is not None or self.daily_trade_limit_hit: return
@@ -656,7 +657,8 @@ class Strategy:
             keys_to_convert = [
                 "start_capital", "trailing_sl_points", "trailing_sl_percent", 
                 "daily_sl", "daily_pt", "partial_profit_pct", "partial_exit_pct", 
-                "risk_per_trade_percent", "recovery_threshold_pct", "max_lots_per_order"
+                "risk_per_trade_percent", "recovery_threshold_pct", "max_lots_per_order",
+                "vol_circuit_breaker_pct", "max_vol_for_reversal_pct", "min_vol_for_trend_pct"
             ]
             for key in keys_to_convert:
                 if key in p and p[key]: p[key] = float(p[key])

@@ -82,7 +82,6 @@ export default function ParametersPanel({ isMock = false }) {
         return <Paper sx={{ p: 2, textAlign: 'center' }}><CircularProgress /></Paper>;
     }
     
-    // MODIFIED: Added !isBotRunning condition to the status check
     if (auth.status !== 'authenticated' && !isBotRunning) {
         return (
             <Paper elevation={3} sx={{ p: 2 }}>
@@ -96,7 +95,6 @@ export default function ParametersPanel({ isMock = false }) {
         );
     }
     
-    // MODIFIED: Added fields for the new parameters
     const fields = [
         { label: 'Select Index', name: 'selectedIndex', type: 'select', options: ['SENSEX', 'NIFTY'] },
         { label: 'Trading Mode', name: 'trading_mode', type: 'select', options: ['Paper Trading', 'Live Trading'] },
@@ -108,9 +106,12 @@ export default function ParametersPanel({ isMock = false }) {
         { label: 'Daily PT (₹)', name: 'daily_pt', type: 'number' },
         { label: 'Partial Profit %', name: 'partial_profit_pct', type: 'number'},
         { label: 'Partial Exit %', name: 'partial_exit_pct', type: 'number'},
-        // ADDED: New parameter fields
         { label: 'Re-entry Thresh (%)', name: 'recovery_threshold_pct', type: 'number' },
-        { label: 'Max Qty / Order (1800-NIFTY 1000-SENSEX)', name: 'max_lots_per_order', type: 'number' },
+        { label: 'Max Qty / Order', name: 'max_lots_per_order', type: 'number' },
+        // --- ADDED: New volatility parameter fields ---
+        { label: 'Vol Circuit Breaker (%)', name: 'vol_circuit_breaker_pct', type: 'number' },
+        { label: 'Max Vol for Reversal (%)', name: 'max_vol_for_reversal_pct', type: 'number' },
+        { label: 'Min Vol for Trend (%)', name: 'min_vol_for_trend_pct', type: 'number' },
     ];
 
     return (
