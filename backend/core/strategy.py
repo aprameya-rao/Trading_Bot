@@ -11,7 +11,7 @@ from .websocket_manager import ConnectionManager
 from .data_manager import DataManager
 from .risk_manager import RiskManager
 from .trade_logger import TradeLogger
-from .order_manager import OrderManager
+from .order_manager import OrderManager, _round_to_tick
 from .database import today_engine, sql_text
 from .entry_strategies import (
     IntraCandlePatternStrategy,
@@ -215,25 +215,59 @@ class Strategy:
     async def take_trade(self, trigger, opt):
         async with self.position_lock:
             if self.position or not opt: return
+        
         instrument_token = opt.get("instrument_token")
-        symbol, side, price, lot_size = opt["tradingsymbol"], opt["instrument_type"], self.data_manager.prices.get(opt["tradingsymbol"]), opt.get("lot_size")
-        qty, initial_sl_price = self.risk_manager.calculate_trade_details(price, lot_size)
-        if qty is None or instrument_token is None: await self._log_debug("Trade Rejected", "Could not calculate quantity or find instrument token."); return
+        symbol, side, current_price, lot_size = opt["tradingsymbol"], opt["instrument_type"], self.data_manager.prices.get(opt["tradingsymbol"]), opt.get("lot_size")
+        
+        qty, initial_sl_price = self.risk_manager.calculate_trade_details(current_price, lot_size)
+        if qty is None or instrument_token is None: 
+            await self._log_debug("Trade Rejected", "Could not calculate quantity or find instrument token.")
+            return
+
         try:
+            order_type = kite.ORDER_TYPE_MARKET
+            limit_price = None
+
+            if self.params.get("order_type") == "LIMIT":
+                order_type = kite.ORDER_TYPE_LIMIT
+                slippage_pct = self.params.get('limit_order_slippage_pct', 0.5)
+                
+                limit_price = _round_to_tick(current_price * (1 + slippage_pct / 100)) if side == "CE" else _round_to_tick(current_price * (1 - slippage_pct / 100))
+            
+            log_price_info = f"at limit {limit_price:.2f}" if order_type == kite.ORDER_TYPE_LIMIT else "at MARKET"
+            log_reason = f"Reason: {trigger}"
+            
             if self.params.get("trading_mode") == "Live Trading":
-                await self.order_manager.execute_order(transaction_type=kite.TRANSACTION_TYPE_BUY, tradingsymbol=symbol, exchange=self.exchange, quantity=qty)
-                await self._log_debug("LIVE TRADE", f"Confirmed BUY for {symbol}. Qty: {qty} @ Price: {price:.2f}.Reason: {trigger}")
+                await self.order_manager.execute_order(
+                    transaction_type=kite.TRANSACTION_TYPE_BUY, 
+                    tradingsymbol=symbol, 
+                    exchange=self.exchange, 
+                    quantity=qty,
+                    order_type=order_type,
+                    price=limit_price
+                )
+                await self._log_debug("LIVE TRADE", f"Confirmed BUY for {symbol}. Qty: {qty} {log_price_info}. {log_reason}")
             else:
-                await self._log_debug("PAPER TRADE", f"Simulating BUY order for {symbol}. Qty: {qty} @ Price: {price:.2f}.Reason: {trigger}")
-            self.position = {"symbol": symbol, "entry_price": price, "direction": side, "qty": qty, "trail_sl": round(initial_sl_price, 2), "max_price": price, "trigger_reason": trigger, "entry_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "lot_size": lot_size}
+                await self._log_debug("PAPER TRADE", f"Simulating BUY order for {symbol}. Qty: {qty} {log_price_info}. {log_reason}")
+            
+            entry_price_to_record = limit_price if order_type == kite.ORDER_TYPE_LIMIT else current_price
+            self.position = {"symbol": symbol, "entry_price": entry_price_to_record, "direction": side, "qty": qty, "trail_sl": round(initial_sl_price, 2), "max_price": entry_price_to_record, "trigger_reason": trigger, "entry_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "lot_size": lot_size}
+            
             if self.ticker_manager:
                 await self._log_debug("WebSocket", f"Subscribing to active trade token: {instrument_token}")
                 self.ticker_manager.subscribe([instrument_token])
-            self.trades_this_minute += 1; self.performance_stats["total_trades"] += 1
-            self.next_partial_profit_level = 1; _play_sound(self.manager, "entry"); await self._update_ui_trade_status()
+                
+            self.trades_this_minute += 1
+            self.performance_stats["total_trades"] += 1
+            self.next_partial_profit_level = 1
+            _play_sound(self.manager, "entry")
+            await self._update_ui_trade_status()
+            
         except Exception as e:
-            await self._log_debug("CRITICAL-ENTRY-FAIL", f"Failed to execute entry for {symbol}: {e}"); _play_sound(self.manager, "loss")
+            await self._log_debug("CRITICAL-ENTRY-FAIL", f"Failed to execute entry for {symbol}: {e}")
+            _play_sound(self.manager, "loss")
 
+            
     async def exit_position(self, reason):
         if not self.position: return
         p = self.position; exit_price = self.data_manager.prices.get(p["symbol"], p["max_price"])

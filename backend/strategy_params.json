@@ -8,6 +8,8 @@
         "RSI"
         
     ],
+    "order_type": "LIMIT",
+    "limit_order_slippage_pct": 0.5,
     "wma_period": 9,
     "sma_period": 9,
     "rsi_period": 9,

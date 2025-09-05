@@ -81,7 +81,7 @@ export default function ParametersPanel({ isMock = false }) {
     };
     if (auth.status === 'loading') return <Paper sx={{ p: 2, textAlign: 'center' }}><CircularProgress /></Paper>;
     
-    if (auth.status !== 'authenticated') {
+    if (auth.status !== 'authenticated' && !isBotRunning) {
         return (
             <Paper elevation={3} sx={{ p: 2 }}>
                 <Typography variant="h6" sx={{mb: 2}}>Authentication Required</Typography>
