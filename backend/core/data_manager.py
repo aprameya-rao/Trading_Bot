@@ -44,6 +44,8 @@ class DataManager:
         self.price_history = {}
         self.current_candle = {}
         self.option_candles = {}
+        # ADDED: To track the daily open price for the straddle monitor
+        self.option_open_prices = {}
         self.data_df = pd.DataFrame(columns=["open", "high", "low", "close", "sma", "wma", "rsi", "rsi_sma", "atr"])
 
     async def bootstrap_data(self):
@@ -93,16 +95,13 @@ class DataManager:
 
     async def on_new_minute(self, new_minute_ltp):
         """Called by the main strategy when a new minute starts."""
-        # First, check if there's a completed candle to save
         if "minute" in self.current_candle:
-            # This candle is the one from the previous minute, now complete.
             candle_to_add = self.current_candle.copy()
             new_row = pd.DataFrame([candle_to_add], index=[candle_to_add["minute"]])
             self.data_df = pd.concat([self.data_df, new_row]).tail(700)
             self.data_df = self._calculate_indicators(self.data_df)
             await self._update_trend_state()
 
-        # Second, create the new candle for the current minute
         self.current_candle = {
             "minute": datetime.now(timezone.utc).replace(second=0, microsecond=0),
             "open": new_minute_ltp,
@@ -119,13 +118,15 @@ class DataManager:
         current_dt_minute = datetime.now(timezone.utc).replace(second=0, microsecond=0)
         is_new_minute = candle_dict.get("minute") != current_dt_minute
 
-        if is_index and is_new_minute:
-            self.option_open_prices.clear() # Clear daily option open prices on new day's first candle
+        # ADDED: Logic to track the opening price of options for the day
+        if is_index and is_new_minute and datetime.now().time() < datetime.strptime("09:16", "%H:%M").time():
+            # Clear daily option open prices on the first candle of a new day
+            self.option_open_prices.clear()
         
         if not is_index and symbol not in self.option_open_prices:
+            # Store the first price received for an option as its opening price
             self.option_open_prices[symbol] = ltp
 
-        # Only update the H/L/C if it's for the currently forming candle
         if not is_new_minute and "open" in candle_dict:
             candle_dict.update({
                 "high": max(candle_dict.get("high", ltp), ltp),
