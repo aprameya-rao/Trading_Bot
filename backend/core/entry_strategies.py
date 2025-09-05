@@ -4,6 +4,7 @@ import asyncio
 import pandas as pd
 import numpy as np
 from abc import ABC, abstractmethod
+from datetime import datetime, timedelta
 
 # ==============================================================================
 # SECTION 1: CANDLESTICK PATTERN HELPER FUNCTIONS (Unchanged)
