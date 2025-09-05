@@ -21,18 +21,14 @@ const createParametersSlice = (set) => ({
     params: {},
     loadParams: () => {
         const savedParams = localStorage.getItem('tradingParams');
-        // MODIFIED: Added the new default parameters here
         const defaultParams = {
             selectedIndex: 'SENSEX', trading_mode: 'Paper Trading',
             start_capital: 50000, risk_per_trade_percent: 2.0, trailing_sl_points: 5, 
             trailing_sl_percent: 2.5, daily_sl: -20000, daily_pt: 40000, 
             partial_profit_pct: 3, partial_exit_pct: 30, auto_scan_uoa: false,
-            // --- These are the new default values ---
-            recovery_threshold_pct: 2.0, 
-            max_lots_per_order: 1800,
-            vol_circuit_breaker_pct: 25.0, // For the global safety switch
-            max_vol_for_reversal_pct: 5.0,   // For RSI, Recovery, etc.
-            min_vol_for_trend_pct: 1.0 
+            // REMOVED: Recovery and Max Lots are no longer needed here as they are not used in the simplified logic
+            // recovery_threshold_pct: 2.0, 
+            // max_lots_per_order: 1800
         };
         set({ params: savedParams ? JSON.parse(savedParams) : defaultParams });
     },

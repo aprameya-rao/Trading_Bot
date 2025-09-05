@@ -106,12 +106,13 @@ export default function ParametersPanel({ isMock = false }) {
         { label: 'Daily PT (₹)', name: 'daily_pt', type: 'number' },
         { label: 'Partial Profit %', name: 'partial_profit_pct', type: 'number'},
         { label: 'Partial Exit %', name: 'partial_exit_pct', type: 'number'},
-        { label: 'Re-entry Thresh (%)', name: 'recovery_threshold_pct', type: 'number' },
-        { label: 'Max Qty / Order', name: 'max_lots_per_order', type: 'number' },
-        // --- ADDED: New volatility parameter fields ---
-        { label: 'Vol Circuit Breaker (%)', name: 'vol_circuit_breaker_pct', type: 'number' },
-        { label: 'Max Vol for Reversal (%)', name: 'max_vol_for_reversal_pct', type: 'number' },
-        { label: 'Min Vol for Trend (%)', name: 'min_vol_for_trend_pct', type: 'number' },
+        // REMOVED: Recovery and Max Qty are no longer used by the backend logic
+        // { label: 'Re-entry Thresh (%)', name: 'recovery_threshold_pct', type: 'number' },
+        // { label: 'Max Qty / Order', name: 'max_lots_per_order', type: 'number' },
+        // REMOVED: Volatility parameters are no longer used by the backend logic
+        // { label: 'Vol Circuit Breaker (%)', name: 'vol_circuit_breaker_pct', type: 'number' },
+        // { label: 'Max Vol for Reversal (%)', name: 'max_vol_for_reversal_pct', type: 'number' },
+        // { label: 'Min Vol for Trend (%)', name: 'min_vol_for_trend_pct', type: 'number' },
     ];
 
     return (
