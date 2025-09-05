@@ -2,7 +2,6 @@ import { create } from 'zustand';
 
 const spectatorFlag = !!import.meta.env.VITE_MASTER_BACKEND_URL;
 
-
 const initialRealtimeState = {
     chartData: null,
     botStatus: { connection: 'DISCONNECTED', mode: 'NOT STARTED', indexPrice: 0, trend: '---', indexName: 'INDEX', is_running: false },
@@ -13,6 +12,7 @@ const initialRealtimeState = {
     allTimeTradeHistory: [], 
     optionChain: [],
     uoaList: [],
+    straddleData: null,
     socketStatus: 'DISCONNECTED',
 };
 
@@ -21,12 +21,15 @@ const createParametersSlice = (set) => ({
     params: {},
     loadParams: () => {
         const savedParams = localStorage.getItem('tradingParams');
+        // MODIFIED: Added the new default parameters here
         const defaultParams = {
-            selectedIndex: 'SENSEX', trading_mode: 'Paper Trading', aggressiveness: 'Moderate', 
+            selectedIndex: 'SENSEX', trading_mode: 'Paper Trading',
             start_capital: 50000, risk_per_trade_percent: 2.0, trailing_sl_points: 5, 
             trailing_sl_percent: 2.5, daily_sl: -20000, daily_pt: 40000, 
             partial_profit_pct: 3, partial_exit_pct: 30, auto_scan_uoa: false,
-            recovery_threshold_pct: 2.0, max_lots_per_order: 1800
+            // --- These are the new default values ---
+            recovery_threshold_pct: 2.0, 
+            max_lots_per_order: 1800
         };
         set({ params: savedParams ? JSON.parse(savedParams) : defaultParams });
     },
@@ -43,16 +46,7 @@ const createParametersSlice = (set) => ({
 
 // ===== Real-time Data Slice =====
 const createRealtimeDataSlice = (set) => ({
-    chartData: null,
-    botStatus: { connection: 'DISCONNECTED', mode: 'NOT STARTED', indexPrice: 0, trend: '---', indexName: 'INDEX', is_running: false },
-    dailyPerformance: { grossPnl: 0, totalCharges: 0, netPnl: 0, wins: 0, losses: 0 },
-    currentTrade: null,
-    debugLogs: [],
-    tradeHistory: [],
-    allTimeTradeHistory: [], 
-    optionChain: [],
-    uoaList: [],
-    socketStatus: 'DISCONNECTED',
+    ...initialRealtimeState,
     resetRealtimeData: () => set(initialRealtimeState),
     isSpectatorMode: spectatorFlag,
     setSocketStatus: (status) => set({ socketStatus: status }),
@@ -68,9 +62,7 @@ const createRealtimeDataSlice = (set) => ({
     updateStraddleData: (payload) => set({ straddleData: payload }),
     addTradeToHistory: (trade) => set(state => ({ 
         tradeHistory: [trade, ...state.tradeHistory],
-        // Also add the new trade to the all-time list for live updates
         allTimeTradeHistory: [trade, ...state.allTimeTradeHistory]
-
     })),
 });
 
@@ -80,3 +72,4 @@ export const useStore = create((...a) => ({
 }));
 
 useStore.getState().loadParams();
+
