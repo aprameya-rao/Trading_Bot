@@ -179,77 +179,35 @@ class Strategy:
             if self.position or not opt: return
         
         instrument_token = opt.get("instrument_token")
-        symbol = opt["tradingsymbol"]
+        symbol, side, price, lot_size = opt["tradingsymbol"], opt["instrument_type"], self.data_manager.prices.get(opt["tradingsymbol"]), opt.get("lot_size")
         
-        current_price = self.data_manager.prices.get(symbol)
-        if current_price is None or current_price <= 0: 
-            await self._log_debug("Trade Rejected", f"Invalid live price for {symbol}: {current_price}")
-            return
-
-        side, lot_size = opt["instrument_type"], opt.get("lot_size")
-        
-        available_cash = None
-        if self.params.get("trading_mode") == "Live Trading":
-            try:
-                margins = await asyncio.to_thread(kite.margins)
-                available_cash = margins['equity']['available']['cash']
-            except Exception as e:
-                await self._log_debug("API_ERROR", f"Could not fetch margins, aborting trade: {e}")
-                return
-
-        qty, initial_sl_price = self.risk_manager.calculate_trade_details(current_price, lot_size, available_cash)
+        qty, initial_sl_price = self.risk_manager.calculate_trade_details(price, lot_size)
         
         if qty is None or instrument_token is None: 
-            await self._log_debug("Trade Rejected", "Could not calculate quantity. Check risk/capital parameters.")
+            await self._log_debug("Trade Rejected", "Could not calculate quantity or find instrument token.")
             return
-
+            
         try:
-            max_lots_per_order = self.params.get('max_lots_per_order', 1800)
-            orders_to_place = []
-            remaining_qty = qty
-            while remaining_qty > 0:
-                order_qty = min(remaining_qty, max_lots_per_order)
-                orders_to_place.append(order_qty)
-                remaining_qty -= order_qty
-
-            total_filled_qty = 0
-            for i, order_qty in enumerate(orders_to_place):
-                if len(orders_to_place) > 1:
-                    await self._log_debug("Order Slicing", f"Placing child order {i+1}/{len(orders_to_place)} for {order_qty} units.")
+            if self.params.get("trading_mode") == "Live Trading":
+                await self.order_manager.execute_order(transaction_type=kite.TRANSACTION_TYPE_BUY, tradingsymbol=symbol, exchange=self.exchange, quantity=qty)
+                await self._log_debug("LIVE TRADE", f"Confirmed BUY for {symbol}. Qty: {qty} @ Price: {price:.2f}.Reason: {trigger}")
+            else:
+                await self._log_debug("PAPER TRADE", f"Simulating BUY order for {symbol}. Qty: {qty} @ Price: {price:.2f}.Reason: {trigger}")
+            
+            self.position = {"symbol": symbol, "entry_price": price, "direction": side, "qty": qty, "trail_sl": round(initial_sl_price, 2), "max_price": price, "trigger_reason": trigger, "entry_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "lot_size": lot_size}
+            
+            if self.ticker_manager:
+                await self._log_debug("WebSocket", f"Subscribing to active trade token: {instrument_token}")
+                self.ticker_manager.subscribe([instrument_token])
                 
-                order_type = kite.ORDER_TYPE_MARKET; limit_price = None
-                if self.params.get("order_type") == "LIMIT":
-                    order_type = kite.ORDER_TYPE_LIMIT
-                    slippage_pct = self.params.get('limit_order_slippage_pct', 0.5)
-                    limit_price = _round_to_tick(current_price * (1 + slippage_pct / 100))
-
-                if self.params.get("trading_mode") == "Live Trading":
-                    try:
-                        await self.order_manager.execute_order(
-                            transaction_type=kite.TRANSACTION_TYPE_BUY, tradingsymbol=symbol, 
-                            exchange=self.exchange, quantity=order_qty,
-                            order_type=order_type, price=limit_price)
-                        total_filled_qty += order_qty
-                    except Exception as e:
-                        await self._log_debug("CRITICAL-ENTRY-FAIL", f"Order failed: {e}. Aborting.")
-                        break
-                else:
-                     await self._log_debug("PAPER TRADE", f"Simulating BUY for {order_qty} of {symbol}")
-                     total_filled_qty += order_qty
-                if len(orders_to_place) > 1 and i < len(orders_to_place) - 1: await asyncio.sleep(0.3)
-
-            if total_filled_qty <= 0:
-                await self._log_debug("Trade", "Aborted. No quantity was filled.")
-                return
-
-            entry_price_to_record = limit_price if self.params.get("order_type") == "LIMIT" else current_price
-            self.position = {"symbol": symbol, "entry_price": entry_price_to_record, "direction": side, "qty": total_filled_qty, "trail_sl": round(initial_sl_price, 2), "max_price": entry_price_to_record, "trigger_reason": trigger, "entry_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "lot_size": lot_size}
-            if self.ticker_manager: self.ticker_manager.subscribe([instrument_token])
-            self.trades_this_minute += 1; self.performance_stats["total_trades"] += 1
-            self.next_partial_profit_level = 1; _play_sound(self.manager, "entry")
+            self.trades_this_minute += 1
+            self.performance_stats["total_trades"] += 1
+            self.next_partial_profit_level = 1
+            _play_sound(self.manager, "entry")
             await self._update_ui_trade_status()
+            
         except Exception as e:
-            await self._log_debug("CRITICAL-ENTRY-FAIL", f"Unhandled error in take_trade for {symbol}: {e}")
+            await self._log_debug("CRITICAL-ENTRY-FAIL", f"Failed to execute entry for {symbol}: {e}")
             _play_sound(self.manager, "loss")
 
     async def exit_position(self, reason):
