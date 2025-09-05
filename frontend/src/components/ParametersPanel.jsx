@@ -110,7 +110,7 @@ export default function ParametersPanel({ isMock = false }) {
         { label: 'Partial Exit %', name: 'partial_exit_pct', type: 'number'},
         // ADDED: New parameter fields
         { label: 'Re-entry Thresh (%)', name: 'recovery_threshold_pct', type: 'number' },
-        { label: 'Max Qty / Order', name: 'max_lots_per_order', type: 'number' },
+        { label: 'Max Qty / Order (1800-NIFTY 1000-SENSEX)', name: 'max_lots_per_order', type: 'number' },
     ];
 
     return (
