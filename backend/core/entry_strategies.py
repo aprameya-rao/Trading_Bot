@@ -74,8 +74,13 @@ class BaseEntryStrategy(ABC):
         if not opt: return False
         symbol = opt['tradingsymbol']
         strike = opt['strike']
-        if not self.data_manager.is_price_rising(symbol): return False
-        if not await self._is_opposite_falling(side, strike): return False
+        
+        if not self.data_manager.is_average_price_trending(symbol, 'up'):
+            return False
+
+        if not await self._is_opposite_falling(side, strike):
+            return False
+            
         if not self._momentum_ok(side, symbol): return False
         if not self._is_accelerating(symbol): return False
         await self.strategy._log_debug("Validation", f"PASS: All entry conditions met for {symbol}.")
@@ -85,46 +90,50 @@ class BaseEntryStrategy(ABC):
         opposite_side = 'PE' if side == 'CE' else 'CE'
         opposite_opt = self.strategy.get_entry_option(opposite_side, strike)
         if not opposite_opt: return True
+        
         opposite_symbol = opposite_opt['tradingsymbol']
-        history = self.data_manager.price_history.get(opposite_symbol, [])
-        if len(history) < 3: return True
-        if history[-1] < history[-2]: return True
-        return False
+        return self.data_manager.is_average_price_trending(opposite_symbol, 'down')
 
-    def _momentum_ok(self, side, opt_sym, look=3):
+    def _momentum_ok(self, side, opt_sym, look=20):
         idx_prices = self.data_manager.price_history.get(self.strategy.index_symbol, [])
         opt_prices = self.data_manager.price_history.get(opt_sym, [])
         if len(idx_prices) < look or len(opt_prices) < look: return False
-        idx_up = sum(1 for i in range(1, look) if idx_prices[-i] > idx_prices[-i - 1])
-        opt_up = sum(1 for i in range(1, look) if opt_prices[-i] > opt_prices[-i - 1])
+        
+        # Get prices only, discard timestamps for this calculation
+        idx_price_values = [p for ts, p in idx_prices]
+        opt_price_values = [p for ts, p in opt_prices]
+
+        idx_up = sum(1 for i in range(1, look) if idx_price_values[-i] > idx_price_values[-i - 1])
+        opt_up = sum(1 for i in range(1, look) if opt_price_values[-i] > opt_price_values[-i - 1])
+        
         if side == 'CE':
             return idx_up >= 1 and opt_up >= 1
         else: # PE
             idx_dn = (look - 1) - idx_up
             return idx_dn >= 1 and opt_up >= 1
 
-    def _is_accelerating(self, symbol, lookback_ticks=5, acceleration_factor=2.0):
-        prices = self.data_manager.price_history.get(symbol, [])
-        if len(prices) < lookback_ticks: return False
+    def _is_accelerating(self, symbol, lookback_ticks=20, acceleration_factor=2.0):
+        history = self.data_manager.price_history.get(symbol, [])
+        if len(history) < lookback_ticks: return False
+        
+        # Get prices only from (timestamp, price) tuples
+        prices = [p for ts, p in history]
+
         recent_prices = prices[-lookback_ticks:]
         diffs = np.diff(recent_prices)
         if len(diffs) < 2: return False
+
         current_velocity = diffs[-1]
         avg_velocity = np.mean(diffs[:-1])
+
         if current_velocity <= 0: return False
         if avg_velocity > 0 and current_velocity > avg_velocity * acceleration_factor:
             return True
+            
         return False
 
 class UoaEntryStrategy(BaseEntryStrategy):
-    """Acts on the UOA watchlist. Considers it a high-momentum signal."""
     async def check(self):
-        # --- Volatility Filter ---
-        min_vol = self.params.get('min_vol_for_trend_pct', 1.0)
-        straddle_change_pct = self.strategy.straddle_data.get('change_pct', 0)
-        if straddle_change_pct < min_vol:
-            return None, None, None
-
         if not self.strategy.uoa_watchlist: return None, None, None
         
         for token, data in list(self.strategy.uoa_watchlist.items()):
@@ -135,7 +144,9 @@ class UoaEntryStrategy(BaseEntryStrategy):
             if current_price <= option_candle['open']:
                 await self.strategy._log_debug("UOA Trigger", f"REJECTED: {symbol} price {current_price} is not above its 1-min open {option_candle['open']}.")
                 continue
-            opt = self.strategy.get_entry_option(side)
+            
+            opt = self.strategy.get_entry_option(side, strike)
+            
             if await self._validate_entry_conditions1(side, opt):
                 del self.strategy.uoa_watchlist[token]
                 await self.strategy._update_ui_uoa_list()
@@ -146,28 +157,24 @@ class UoaEntryStrategy(BaseEntryStrategy):
         if not opt: return False
         symbol = opt['tradingsymbol']
         log_report = []
-        is_rising = self.data_manager.is_price_rising(symbol)
-        log_report.append(f"Price Rising: {is_rising}")
-        if not is_rising:
+
+        is_trending = self.data_manager.is_average_price_trending(symbol, 'up')
+        log_report.append(f"Avg Price Trending: {is_trending}")
+        if not is_trending:
             await self.strategy._log_debug("UOA Validation", f"REJECTED {symbol} | Report: [{', '.join(log_report)}]")
             return False
+
         momentum_is_ok = self._momentum_ok(side, symbol)
         log_report.append(f"Momentum OK: {momentum_is_ok}")
         if not momentum_is_ok:
             await self.strategy._log_debug("UOA Validation", f"REJECTED {symbol} | Report: [{', '.join(log_report)}]")
             return False
+        
         await self.strategy._log_debug("UOA Validation", f"PASS {symbol} | Report: [{', '.join(log_report)}]")
         return True
 
 class TrendContinuationStrategy(BaseEntryStrategy):
-    """Enters on a breakout. This is a trend-following strategy."""
     async def check(self):
-        # --- Volatility Filter ---
-        min_vol = self.params.get('min_vol_for_trend_pct', 1.0)
-        straddle_change_pct = self.strategy.straddle_data.get('change_pct', 0)
-        if straddle_change_pct < min_vol:
-            return None, None, None
-
         trend = self.data_manager.trend_state
         if not trend or len(self.data_manager.data_df) < 2: return None, None, None
         prev_candle = self.data_manager.data_df.iloc[-1]
@@ -183,14 +190,7 @@ class TrendContinuationStrategy(BaseEntryStrategy):
         return None, None, None
 
 class MaCrossoverStrategy(BaseEntryStrategy):
-    """Enters on a crossover. This is a trend-following strategy."""
     async def check(self):
-        # --- Volatility Filter ---
-        min_vol = self.params.get('min_vol_for_trend_pct', 1.0)
-        straddle_change_pct = self.strategy.straddle_data.get('change_pct', 0)
-        if straddle_change_pct < min_vol:
-            return None, None, None
-
         df = self.data_manager.data_df
         if len(df) < 2: return None, None, None
         last, prev = df.iloc[-1], df.iloc[-2]
@@ -205,14 +205,7 @@ class MaCrossoverStrategy(BaseEntryStrategy):
         return None, None, None
 
 class CandlePatternEntryStrategy(BaseEntryStrategy):
-    """Enters on a Doji reversal. This is a mean-reversion strategy."""
     async def check(self):
-        # --- Volatility Filter ---
-        max_vol = self.params.get('max_vol_for_reversal_pct', 5.0)
-        straddle_change_pct = self.strategy.straddle_data.get('change_pct', 0)
-        if straddle_change_pct > max_vol:
-            return None, None, None
-
         df = self.data_manager.data_df
         if len(df) < 3 or not self.data_manager.trend_state: return None, None, None
         last = df.iloc[-1]
@@ -226,49 +219,8 @@ class CandlePatternEntryStrategy(BaseEntryStrategy):
                 return side, pattern, opt
         return None, None, None
 
-class RsiImmediateEntryStrategy(BaseEntryStrategy):
-    """Enters on RSI crossover. This is a mean-reversion strategy."""
-    async def check(self):
-        # --- Volatility Filter ---
-        max_vol = self.params.get('max_vol_for_reversal_pct', 5.0)
-        straddle_change_pct = self.strategy.straddle_data.get('change_pct', 0)
-        if straddle_change_pct > max_vol:
-            return None, None, None
-
-        df = self.data_manager.data_df
-        params = self.strategy.STRATEGY_PARAMS
-        if len(df) < params.get('rsi_angle_lookback', 2) + 2: return None, None, None
-        last, prev = df.iloc[-1], df.iloc[-2]
-        if any(pd.isna(v) for v in [last['rsi'], prev['rsi'], last['rsi_sma'], prev['rsi_sma']]): return None, None, None
-        angle_thresh = params.get('rsi_angle_threshold', 12.5)
-        angle = self._calculate_rsi_angle(df)
-        side = None
-        if (last['rsi'] > last['rsi_sma'] and prev['rsi'] <= prev['rsi_sma'] and angle > angle_thresh): side = 'CE'
-        elif (last['rsi'] < last['rsi_sma'] and prev['rsi'] >= prev['rsi_sma'] and angle < -angle_thresh): side = 'PE'
-        if side:
-            opt = self.strategy.get_entry_option(side)
-            if await self._validate_entry_conditions(side, opt):
-                return side, f'RSI_Immediate_{side}', opt
-        return None, None, None
-
-    def _calculate_rsi_angle(self, df):
-        lookback = self.strategy.STRATEGY_PARAMS.get("rsi_angle_lookback", 2)
-        if len(df) < lookback + 1: return 0
-        rsi_values = df["rsi"].iloc[-(lookback + 1):].values
-        try:
-            coeffs = np.polyfit(np.arange(len(rsi_values)), rsi_values, 1)
-            return math.degrees(math.atan(coeffs[0]))
-        except (np.linalg.LinAlgError, ValueError): return 0
-
 class IntraCandlePatternStrategy(BaseEntryStrategy):
-    """Identifies patterns on the live candle. Mostly high-momentum signals."""
     async def check(self):
-        # --- Volatility Filter ---
-        min_vol = self.params.get('min_vol_for_trend_pct', 1.0)
-        straddle_change_pct = self.strategy.straddle_data.get('change_pct', 0)
-        if straddle_change_pct < min_vol:
-            return None, None, None
-            
         if self.strategy.position: return None, None, None
         df = self.data_manager.data_df
         if len(df) < 3 or 'open' not in self.data_manager.current_candle: return None, None, None
@@ -286,29 +238,4 @@ class IntraCandlePatternStrategy(BaseEntryStrategy):
             opt = self.strategy.get_entry_option(side)
             if await self._validate_entry_conditions(side, opt):
                 return side, pattern, opt
-        return None, None, None
-
-class RecoveryEntryStrategy(BaseEntryStrategy):
-    """Checks for re-entry on a stopped-out trade. This is a mean-reversion strategy."""
-    async def check(self):
-        # --- Volatility Filter ---
-        max_vol = self.params.get('max_vol_for_reversal_pct', 5.0)
-        straddle_change_pct = self.strategy.straddle_data.get('change_pct', 0)
-        if straddle_change_pct > max_vol:
-            return None, None, None
-
-        last_exit = self.strategy.last_exit_info
-        if not last_exit or datetime.now() - last_exit['time'] > timedelta(minutes=2):
-            if last_exit: self.strategy.last_exit_info = None
-            return None, None, None
-        current_price = self.data_manager.prices.get(last_exit['symbol'])
-        if not current_price: return None, None, None
-        recovery_threshold = self.params.get('recovery_threshold_pct', 2.0)
-        recovery_price = last_exit['exit_price'] * (1 + recovery_threshold / 100)
-        if current_price >= recovery_price:
-            await self.strategy._log_debug("Signal", f"Recovery signal for {last_exit['symbol']}!")
-            opt = next((o for o in self.strategy.option_instruments if o['tradingsymbol'] == last_exit['symbol']), None)
-            self.strategy.last_exit_info = None
-            if opt:
-                return last_exit['side'], "Recovery", opt
         return None, None, None
