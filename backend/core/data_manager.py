@@ -119,6 +119,12 @@ class DataManager:
         current_dt_minute = datetime.now(timezone.utc).replace(second=0, microsecond=0)
         is_new_minute = candle_dict.get("minute") != current_dt_minute
 
+        if is_index and is_new_minute:
+            self.option_open_prices.clear() # Clear daily option open prices on new day's first candle
+        
+        if not is_index and symbol not in self.option_open_prices:
+            self.option_open_prices[symbol] = ltp
+
         # Only update the H/L/C if it's for the currently forming candle
         if not is_new_minute and "open" in candle_dict:
             candle_dict.update({

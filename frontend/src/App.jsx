@@ -9,6 +9,7 @@ import CurrentTradePanel from './components/CurrentTradePanel';
 import IndexChart from './components/IndexChart';
 import OptionChain from './components/OptionChain';
 import LogTabs from './components/LogTabs';
+import StraddleMonitor from './components/StraddleMonitor'; // IMPORT the new component
 import { createSocketConnection } from './services/socket';
 import { manualExit, getTradeHistory, getTradeHistoryAll } from './services/api';
 import { useStore } from './store/store';
@@ -55,7 +56,6 @@ function App() {
             const handleOpen = async () => {
                 setState({ socketStatus: 'CONNECTED' });
                 
-                // Fetch both sets of data concurrently when the app starts.
                 try {
                     console.log("Fetching trade histories...");
                     const [todayHistory, allTimeHistory] = await Promise.all([
@@ -90,7 +90,16 @@ function App() {
                         case 'option_chain_update': getState().updateOptionChain(data.payload); break;
                         case 'uoa_list_update': getState().updateUoaList(data.payload); break;
                         case 'chart_data_update': getState().updateChartData(data.payload); break;
+                        // ADDED: Handle straddle monitor updates
+                        case 'straddle_update': getState().updateStraddleData(data.payload); break;
                         case 'play_sound': if (sounds[data.payload]) sounds[data.payload].play(); break;
+                        // ADDED: Handle system warnings like open positions
+                        case 'system_warning':
+                            enqueueSnackbar(data.payload.message, { 
+                                variant: 'warning',
+                                persist: true, // Keep message visible
+                            });
+                            break;
                         case 'pong': break;
                     }
                 } catch (error) {
@@ -146,6 +155,8 @@ function App() {
                         <Grid item><CurrentTradePanel trade={currentTrade} onManualExit={handleManualExit} /></Grid>
                         <Grid item><ParametersPanel isMock={MOCK_MODE} /></Grid>
                         <Grid item><IntelligencePanel /></Grid>
+                        {/* ADDED: Straddle Monitor component in the layout */}
+                        <Grid item><StraddleMonitor /></Grid>
                         <Grid item><NetPerformancePanel data={dailyPerformance} /></Grid>
                     </Grid>
                     <Grid item xs={12} md={8} sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -160,3 +171,4 @@ function App() {
 }
 
 export default App;
+

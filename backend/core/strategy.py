@@ -1,3 +1,4 @@
+# backend/core/strategy.py
 import asyncio
 import json
 import pandas as pd
@@ -19,7 +20,8 @@ from .entry_strategies import (
     TrendContinuationStrategy,
     RsiImmediateEntryStrategy,
     MaCrossoverStrategy,
-    CandlePatternEntryStrategy
+    CandlePatternEntryStrategy,
+    RecoveryEntryStrategy  # ADDED
 )
 
 if TYPE_CHECKING:
@@ -33,7 +35,7 @@ INDEX_CONFIG = {
 }
 
 MARKET_STANDARD_PARAMS = {
-    "strategy_priority": ["UOA", "TREND_CONTINUATION", "MA_CROSSOVER", "CANDLE_PATTERN", "RSI", "INTRA_CANDLE"],
+    "strategy_priority": ["RECOVERY", "UOA", "TREND_CONTINUATION", "MA_CROSSOVER", "CANDLE_PATTERN", "RSI", "INTRA_CANDLE"],
     'wma_period': 9, 'sma_period': 9, 'rsi_period': 9, 'rsi_signal_period': 3,
     'rsi_angle_lookback': 2, 'rsi_angle_threshold': 15.0, 'atr_period': 14,
     'min_atr_value': 4, 'ma_gap_threshold_pct': 0.05
@@ -62,13 +64,15 @@ class Strategy:
         self.trade_logger = TradeLogger(self.db_lock)
         self.order_manager = OrderManager(self._log_debug)
 
+        # MODIFIED: Added RecoveryEntryStrategy
         strategy_map = {
+            "RECOVERY": RecoveryEntryStrategy,
             "INTRA_CANDLE": IntraCandlePatternStrategy, "UOA": UoaEntryStrategy,
             "TREND_CONTINUATION": TrendContinuationStrategy, "RSI": RsiImmediateEntryStrategy,
             "MA_CROSSOVER": MaCrossoverStrategy, "CANDLE_PATTERN": CandlePatternEntryStrategy
         }
         self.entry_strategies = []
-        default_priority = ["UOA", "TREND_CONTINUATION", "MA_CROSSOVER", "CANDLE_PATTERN", "RSI", "INTRA_CANDLE"]
+        default_priority = ["RECOVERY", "UOA", "TREND_CONTINUATION", "MA_CROSSOVER", "CANDLE_PATTERN", "RSI", "INTRA_CANDLE"]
         priority_list = self.STRATEGY_PARAMS.get("strategy_priority", default_priority)
         for name in priority_list:
             if name in strategy_map:
@@ -78,53 +82,29 @@ class Strategy:
         self.option_instruments = self.load_instruments()
         self.last_used_expiry = self.get_weekly_expiry()
 
-    # --- THIS IS THE CORRECTED FUNCTION (PATH A) ---
     async def _calculate_trade_charges(self, tradingsymbol, exchange, entry_price, exit_price, quantity):
-        """
-        Calculates the precise total charges for a round-trip options trade
-        based on the user-provided rates for NIFTY and SENSEX.
-        """
-        # --- Define Charge Rates ---
         BROKERAGE_PER_ORDER = 20.0
-        # STT is 0.0625% on sell-side turnover for options as per new budget 2023.
-        # User specified 0.1% on sell side premium. Using user's value.
         STT_RATE = 0.001 
         GST_RATE = 0.18
-        SEBI_RATE = 10 / 1_00_00_000  # 10 per Crore
-        STAMP_DUTY_RATE = 0.00003 # 0.003% or 300 per Crore
+        SEBI_RATE = 10 / 1_00_00_000
+        STAMP_DUTY_RATE = 0.00003
 
-        # --- Exchange-Specific Transaction Charges ---
-        if exchange == "NFO":  # NIFTY Options on NSE
-            EXCHANGE_TXN_CHARGE_RATE = 0.00053 # As per NSE documentation
-        elif exchange == "BFO":  # SENSEX Options on BSE
-            EXCHANGE_TXN_CHARGE_RATE = 0.000325 # As per user's value
-        else: # Default fallback to NSE rate
+        if exchange == "NFO":
+            EXCHANGE_TXN_CHARGE_RATE = 0.00053
+        elif exchange == "BFO":
+            EXCHANGE_TXN_CHARGE_RATE = 0.000325
+        else:
             EXCHANGE_TXN_CHARGE_RATE = 0.00053
 
-        # --- Calculate Base Values ---
         buy_value = entry_price * quantity
         sell_value = exit_price * quantity
         total_turnover = buy_value + sell_value
-
-        # --- Calculate Individual Charges ---
         
-        # 1. Brokerage: Flat fee per buy and sell order.
         brokerage = BROKERAGE_PER_ORDER * 2
-
-        # 2. STT: Applied only on the sell-side value for intraday options trades.
-        # Note: The 0.0125% on intrinsic value is only for exercised ITM options held to expiry.
         stt = sell_value * STT_RATE
-
-        # 3. Exchange Transaction Charges: Applied on total turnover, rate varies by exchange.
         exchange_charges = total_turnover * EXCHANGE_TXN_CHARGE_RATE
-
-        # 4. SEBI Charges: Applied on total turnover.
         sebi_charges = total_turnover * SEBI_RATE
-
-        # 5. GST: 18% on Brokerage, Transaction Charges, and SEBI Charges.
         gst = (brokerage + exchange_charges + sebi_charges) * GST_RATE
-        
-        # 6. Stamp Duty: Applied only on the buy-side value.
         stamp_duty = buy_value * STAMP_DUTY_RATE
         
         total_charges = brokerage + stt + exchange_charges + gst + sebi_charges + stamp_duty
@@ -137,6 +117,7 @@ class Strategy:
         self.token_to_symbol = {self.index_token: self.index_symbol}; self.uoa_watchlist = {}
         self.performance_stats = {"total_trades": 0, "winning_trades": 0, "losing_trades": 0}
         self.exit_cooldown_until: Optional[datetime] = None; self.disconnected_since: Optional[datetime] = None
+        self.last_exit_info = None  # ADDED: For recovery signal
         self.next_partial_profit_level = 1; self.trend_candle_count = 0
         self.pending_steep_signal = None
 
@@ -207,11 +188,15 @@ class Strategy:
                     if self.position and datetime.now().time() >= time(15, 15):
                         await self._log_debug("RISK", f"EOD square-off time reached. Exiting position.")
                         await self.exit_position("End of Day Auto-Square Off"); continue
-                    await self._update_ui_status(); await self._update_ui_option_chain(); await self._update_ui_chart_data()
+                    await self._update_ui_status()
+                    await self._update_ui_option_chain()
+                    await self._update_ui_chart_data()
+                    await self._update_ui_straddle_monitor() # ADDED
                 await asyncio.sleep(1)
             except asyncio.CancelledError: await self._log_debug("UI Updater", "Task cancelled."); break
             except Exception as e: await self._log_debug("UI Updater Error", f"An error occurred: {e}"); await asyncio.sleep(5)
 
+    # REPLACED: Overhauled take_trade function
     async def take_trade(self, trigger, opt):
         async with self.position_lock:
             if self.position or not opt: return
@@ -220,57 +205,104 @@ class Strategy:
         symbol, side, current_price, lot_size = opt["tradingsymbol"], opt["instrument_type"], self.data_manager.prices.get(opt["tradingsymbol"]), opt.get("lot_size")
         
         qty, initial_sl_price = self.risk_manager.calculate_trade_details(current_price, lot_size)
-        if qty is None or instrument_token is None: 
-            await self._log_debug("Trade Rejected", "Could not calculate quantity or find instrument token.")
+        if qty is None or instrument_token is None or current_price is None or current_price <= 0: 
+            await self._log_debug("Trade Rejected", f"Invalid trade details: Qty={qty}, Token={instrument_token}, Price={current_price}")
             return
 
         try:
-            order_type = kite.ORDER_TYPE_MARKET
-            limit_price = None
+            required_margin = qty * current_price
 
-            if self.params.get("order_type") == "LIMIT":
-                order_type = kite.ORDER_TYPE_LIMIT
-                slippage_pct = self.params.get('limit_order_slippage_pct', 0.5)
-                
-                limit_price = _round_to_tick(current_price * (1 + slippage_pct / 100)) if side == "CE" else _round_to_tick(current_price * (1 - slippage_pct / 100))
-            
-            log_price_info = f"at limit {limit_price:.2f}" if order_type == kite.ORDER_TYPE_LIMIT else "at MARKET"
-            log_reason = f"Reason: {trigger}"
-            
+            # 1. Pre-Trade Margin Check
             if self.params.get("trading_mode") == "Live Trading":
-                await self.order_manager.execute_order(
-                    transaction_type=kite.TRANSACTION_TYPE_BUY, 
-                    tradingsymbol=symbol, 
-                    exchange=self.exchange, 
-                    quantity=qty,
-                    order_type=order_type,
-                    price=limit_price
-                )
-                await self._log_debug("LIVE TRADE", f"Confirmed BUY for {symbol}. Qty: {qty} {log_price_info}. {log_reason}")
-            else:
-                await self._log_debug("PAPER TRADE", f"Simulating BUY order for {symbol}. Qty: {qty} {log_price_info}. {log_reason}")
-            
-            entry_price_to_record = limit_price if order_type == kite.ORDER_TYPE_LIMIT else current_price
-            self.position = {"symbol": symbol, "entry_price": entry_price_to_record, "direction": side, "qty": qty, "trail_sl": round(initial_sl_price, 2), "max_price": entry_price_to_record, "trigger_reason": trigger, "entry_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "lot_size": lot_size}
+                try:
+                    margins = await asyncio.to_thread(kite.margins)
+                    available_cash = margins['equity']['available']['cash']
+                    if required_margin > available_cash:
+                        await self._log_debug("Margin Check", f"FAIL: Insufficient funds. Required: {required_margin:.2f}, Available: {available_cash:.2f}")
+                        return
+                    await self._log_debug("Margin Check", f"PASS: Required: {required_margin:.2f}, Available: {available_cash:.2f}")
+                except Exception as e:
+                    await self._log_debug("API_ERROR", f"Could not fetch margins: {e}")
+                    return
+
+            # 2. Order Slicing Logic
+            max_lots_per_order = self.params.get('max_lots_per_order', lot_size * 100) # Default to 100 lots
+            orders_to_place = []
+            remaining_qty = qty
+            while remaining_qty > 0:
+                order_qty = min(remaining_qty, max_lots_per_order)
+                orders_to_place.append(order_qty)
+                remaining_qty -= order_qty
+
+            # 3. Order Placement Loop
+            total_filled_qty = 0
+            for i, order_qty in enumerate(orders_to_place):
+                if len(orders_to_place) > 1:
+                    await self._log_debug("Order Slicing", f"Placing child order {i+1}/{len(orders_to_place)} for {order_qty} units.")
+
+                order_type = kite.ORDER_TYPE_MARKET
+                limit_price = None
+
+                if self.params.get("order_type") == "LIMIT":
+                    order_type = kite.ORDER_TYPE_LIMIT
+                    slippage_pct = self.params.get('limit_order_slippage_pct', 0.5)
+                    limit_price = _round_to_tick(current_price * (1 + slippage_pct / 100))
+
+                if self.params.get("trading_mode") == "Live Trading":
+                    try:
+                        await self.order_manager.execute_order(
+                            transaction_type=kite.TRANSACTION_TYPE_BUY, tradingsymbol=symbol, 
+                            exchange=self.exchange, quantity=order_qty,
+                            order_type=order_type, price=limit_price
+                        )
+                        total_filled_qty += order_qty
+                    except Exception as e:
+                        await self._log_debug("CRITICAL-ENTRY-FAIL", f"Order failed: {e}. Aborting further orders.")
+                        break
+                else:
+                     await self._log_debug("PAPER TRADE", f"Simulating BUY for {order_qty} of {symbol}")
+                     total_filled_qty += order_qty
+
+                if len(orders_to_place) > 1 and i < len(orders_to_place) - 1:
+                    await asyncio.sleep(0.3)
+
+            if total_filled_qty <= 0:
+                await self._log_debug("Trade", "Aborted. No quantity was filled.")
+                return
+
+            entry_price_to_record = limit_price if self.params.get("order_type") == "LIMIT" else current_price
+            self.position = {"symbol": symbol, "entry_price": entry_price_to_record, "direction": side, "qty": total_filled_qty, "trail_sl": round(initial_sl_price, 2), "max_price": entry_price_to_record, "trigger_reason": trigger, "entry_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "lot_size": lot_size}
             
             if self.ticker_manager:
-                await self._log_debug("WebSocket", f"Subscribing to active trade token: {instrument_token}")
                 self.ticker_manager.subscribe([instrument_token])
                 
-            self.trades_this_minute += 1
-            self.performance_stats["total_trades"] += 1
-            self.next_partial_profit_level = 1
-            _play_sound(self.manager, "entry")
+            self.trades_this_minute += 1; self.performance_stats["total_trades"] += 1
+            self.next_partial_profit_level = 1; _play_sound(self.manager, "entry")
             await self._update_ui_trade_status()
             
         except Exception as e:
-            await self._log_debug("CRITICAL-ENTRY-FAIL", f"Failed to execute entry for {symbol}: {e}")
+            await self._log_debug("CRITICAL-ENTRY-FAIL", f"Unhandled error in take_trade for {symbol}: {e}")
             _play_sound(self.manager, "loss")
 
-            
     async def exit_position(self, reason):
         if not self.position: return
         p = self.position; exit_price = self.data_manager.prices.get(p["symbol"], p["max_price"])
+        
+        # MODIFIED: Logic to store info on stopped-out trades
+        if reason == "Trailing SL":
+            opt_details = next((o for o in self.option_instruments if o['tradingsymbol'] == p['symbol']), None)
+            if opt_details:
+                self.last_exit_info = {
+                    'symbol': p['symbol'], 
+                    'exit_price': exit_price, 
+                    'time': datetime.now(),
+                    'side': p['direction'],
+                    'strike': opt_details['strike']
+                }
+                await self._log_debug("Re-Entry Watch", f"Stopped out. Watching {p['symbol']} for recovery.")
+        else:
+            self.last_exit_info = None
+            
         try:
             sell_log_message = f"Simulating SELL order for {p['symbol']}. Reason: {reason}"
             if self.params.get("trading_mode") == "Live Trading":
@@ -292,12 +324,11 @@ class Strategy:
             if not all(isinstance(v, (int, float)) for v in [p["entry_price"], exit_price, final_pnl, final_charges, final_net_pnl]):
                 await self._log_debug("CRITICAL-LOG-FAIL", f"Aborting trade log for {p['symbol']} due to invalid numeric data.")
                 _play_sound(self.manager, "warning")
-                # VERY IMPORTANT: Still reset the state even if logging fails, to prevent the bot from getting stuck.
                 self.position = None
                 self.exit_cooldown_until = datetime.now() + timedelta(seconds=5)
                 await self._update_ui_trade_status()
                 await self._update_ui_performance()
-                return # Abort the function here before logging bad data
+                return
 
             log_info = { "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f"), "trigger_reason": p["trigger_reason"], "symbol": p["symbol"], "quantity": p["qty"], "pnl": final_pnl, "entry_price": p["entry_price"], "exit_price": exit_price, "exit_reason": reason, "trend_state": self.data_manager.trend_state, "atr": round(self.data_manager.data_df.iloc[-1]["atr"], 2) if not self.data_manager.data_df.empty else 0, "charges": final_charges, "net_pnl": final_net_pnl }
             await self.trade_logger.log_trade(log_info)
@@ -412,6 +443,7 @@ class Strategy:
         else:
             self.pending_steep_signal = None
 
+    # REPLACED: Overhauled entry checking logic
     async def check_trade_entry(self):
         if self.position is not None or self.daily_trade_limit_hit: return
         if self.exit_cooldown_until and datetime.now() < self.exit_cooldown_until: return
@@ -425,15 +457,21 @@ class Strategy:
 
         if await self._check_pending_reversal_entry(): return
 
-        # --- THIS IS THE CORRECTED LOOP ---
-        for entry_strategy in self.entry_strategies:
-            # It now correctly receives all THREE values
-            side, reason, opt = await entry_strategy.check()
-            
-            # It now correctly checks for all three values and uses the 'opt' that was validated
+        # Check for recovery signal first, as it's a special case
+        recovery_strategy = next((s for s in self.entry_strategies if isinstance(s, RecoveryEntryStrategy)), None)
+        if recovery_strategy:
+            side, reason, opt = await recovery_strategy.check()
             if side and reason and opt:
                 await self.take_trade(reason, opt)
-                return # Exit the function once a trade is taken
+                return
+
+        # If no recovery signal, check the other strategies in their defined priority
+        for entry_strategy in self.entry_strategies:
+            if isinstance(entry_strategy, RecoveryEntryStrategy): continue # Skip recovery here
+            side, reason, opt = await entry_strategy.check()
+            if side and reason and opt:
+                await self.take_trade(reason, opt)
+                return
                 
         self._set_pending_reversal_signal()
         
@@ -478,9 +516,34 @@ class Strategy:
             for p in pairs: 
                 ce_symbol = p["ce"]["tradingsymbol"] if p["ce"] else None; pe_symbol = p["pe"]["tradingsymbol"] if p["pe"] else None
                 data.append({"strike": p["strike"], "ce_ltp": self.data_manager.prices.get(ce_symbol, "--") if ce_symbol else "--", "pe_ltp": self.data_manager.prices.get(pe_symbol, "--") if pe_symbol else "--"})
-        # The broadcast is now OUTSIDE the 'if' block again.
         await self.manager.broadcast({"type": "option_chain_update", "payload": data})
 
+    # ADDED: New method for straddle monitor
+    async def _update_ui_straddle_monitor(self):
+        payload = {"current_straddle": 0, "open_straddle": 0, "change_pct": 0}
+        spot = self.data_manager.prices.get(self.index_symbol)
+        if not spot:
+            await self.manager.broadcast({"type": "straddle_update", "payload": payload})
+            return
+
+        atm_strike = self.strike_step * round(spot / self.strike_step)
+        ce_opt = self.get_entry_option('CE', atm_strike)
+        pe_opt = self.get_entry_option('PE', atm_strike)
+
+        if ce_opt and pe_opt:
+            ce_sym, pe_sym = ce_opt['tradingsymbol'], pe_opt['tradingsymbol']
+            ce_ltp = self.data_manager.prices.get(ce_sym)
+            pe_ltp = self.data_manager.prices.get(pe_sym)
+            ce_open = self.data_manager.option_open_prices.get(ce_sym)
+            pe_open = self.data_manager.option_open_prices.get(pe_sym)
+
+            if all([ce_ltp, pe_ltp, ce_open, pe_open]):
+                current_straddle = ce_ltp + pe_ltp
+                open_straddle = ce_open + pe_open
+                change_pct = ((current_straddle / open_straddle) - 1) * 100 if open_straddle > 0 else 0
+                payload = {"current_straddle": current_straddle, "open_straddle": open_straddle, "change_pct": change_pct}
+
+        await self.manager.broadcast({"type": "straddle_update", "payload": payload})
 
     async def _update_ui_chart_data(self):
         temp_df = self.data_manager.data_df.copy()
@@ -523,16 +586,9 @@ class Strategy:
         await self._log_debug("UOA", f"Could not find {side} option for strike {strike}"); _play_sound(self.manager, "warning"); return False
     
     async def reset_uoa_watchlist(self):
-        """Clears the UOA watchlist and updates the UI."""
         await self._log_debug("UOA", "Watchlist reset requested by user.")
-        
-        # Clear the internal dictionary
         self.uoa_watchlist.clear()
-        
-        # Broadcast the empty list to the UI so it updates instantly
         await self._update_ui_uoa_list()
-        
-        # Play a sound for confirmation
         _play_sound(self.manager, "warning")
 
     async def scan_for_unusual_activity(self):
@@ -601,8 +657,7 @@ class Strategy:
     def _sanitize_params(self, params):
         p = params.copy()
         try:
-            for key in ["start_capital", "trailing_sl_points", "trailing_sl_percent", "daily_sl", "daily_pt", "partial_profit_pct", "partial_exit_pct", "risk_per_trade_percent"]:
+            for key in ["start_capital", "trailing_sl_points", "trailing_sl_percent", "daily_sl", "daily_pt", "partial_profit_pct", "partial_exit_pct", "risk_per_trade_percent", "recovery_threshold_pct", "max_lots_per_order"]:
                 if key in p and p[key]: p[key] = float(p[key])
         except (ValueError, TypeError) as e: print(f"Warning: Could not convert a parameter to a number: {e}")
         return p
-

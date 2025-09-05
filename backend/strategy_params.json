@@ -1,5 +1,6 @@
 {
     "strategy_priority": [
+        "RECOVERY",
         "UOA",
         "TREND_CONTINUATION",
         "MA_CROSSOVER",

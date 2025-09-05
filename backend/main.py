@@ -22,6 +22,34 @@ from core.database import today_engine, all_engine
 async def lifespan(app: FastAPI):
     print("Application startup...")
     TradeLogger.setup_databases()
+
+    # --- ADDED: Open Position Reconciliation Logic ---
+    # Small delay to ensure WebSocket manager is ready for potential connections
+    await asyncio.sleep(2)
+    if access_token:
+        try:
+            print("Reconciling open positions...")
+            positions = await asyncio.to_thread(kite.positions)
+            net_positions = positions.get('net', [])
+            open_mis_positions = [
+                p['tradingsymbol'] for p in net_positions 
+                if p.get('product') == 'MIS' and p.get('quantity') != 0
+            ]
+            if open_mis_positions:
+                warning_message = f"Found open MIS positions at broker: {', '.join(open_mis_positions)}. Manual action may be required."
+                print(f"WARNING: {warning_message}")
+                # Broadcast a warning to any connected frontend
+                await manager.broadcast({
+                    "type": "system_warning", 
+                    "payload": {
+                        "title": "Open Positions Detected on Startup",
+                        "message": warning_message
+                    }
+                })
+        except Exception as e:
+            print(f"Could not reconcile open positions: {e}")
+    # --- END OF ADDED LOGIC ---
+
     yield
     print("Application shutdown...")
     service = await get_bot_service()

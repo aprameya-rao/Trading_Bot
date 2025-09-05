@@ -333,3 +333,38 @@ class IntraCandlePatternStrategy(BaseEntryStrategy):
                 return side, pattern, opt
             
         return None, None, None
+    
+
+
+class RecoveryEntryStrategy(BaseEntryStrategy):
+    """
+    Checks if a recently stopped-out trade has recovered enough to be re-entered.
+    """
+    async def check(self):
+        last_exit = self.strategy.last_exit_info
+        
+        # Check if there's a valid candidate for recovery
+        if not last_exit or datetime.now() - last_exit['time'] > timedelta(minutes=2):
+            if last_exit: self.strategy.last_exit_info = None # Clear stale info
+            return None, None, None
+
+        current_price = self.data_manager.prices.get(last_exit['symbol'])
+        if not current_price:
+            return None, None, None
+
+        recovery_threshold = self.params.get('recovery_threshold_pct', 2.0)
+        recovery_price = last_exit['exit_price'] * (1 + recovery_threshold / 100)
+
+        if current_price >= recovery_price:
+            await self.strategy._log_debug("Signal", f"Recovery signal for {last_exit['symbol']}!")
+            # Find the full instrument data for the option
+            opt = next((o for o in self.strategy.option_instruments if o['tradingsymbol'] == last_exit['symbol']), None)
+            
+            # Important: Clear the info so it doesn't trigger again
+            self.strategy.last_exit_info = None
+            
+            # We skip the standard validation gauntlet for this special re-entry
+            if opt:
+                return last_exit['side'], "Recovery", opt
+
+        return None, None, None

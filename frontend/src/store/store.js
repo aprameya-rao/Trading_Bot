@@ -25,7 +25,8 @@ const createParametersSlice = (set) => ({
             selectedIndex: 'SENSEX', trading_mode: 'Paper Trading', aggressiveness: 'Moderate', 
             start_capital: 50000, risk_per_trade_percent: 2.0, trailing_sl_points: 5, 
             trailing_sl_percent: 2.5, daily_sl: -20000, daily_pt: 40000, 
-            partial_profit_pct: 3, partial_exit_pct: 30, auto_scan_uoa: false
+            partial_profit_pct: 3, partial_exit_pct: 30, auto_scan_uoa: false,
+            recovery_threshold_pct: 2.0, max_lots_per_order: 1800
         };
         set({ params: savedParams ? JSON.parse(savedParams) : defaultParams });
     },
@@ -64,6 +65,7 @@ const createRealtimeDataSlice = (set) => ({
     updateOptionChain: (payload) => set({ optionChain: payload }),
     updateUoaList: (payload) => set({ uoaList: payload }),
     updateChartData: (payload) => set({ chartData: payload }),
+    updateStraddleData: (payload) => set({ straddleData: payload }),
     addTradeToHistory: (trade) => set(state => ({ 
         tradeHistory: [trade, ...state.tradeHistory],
         // Also add the new trade to the all-time list for live updates

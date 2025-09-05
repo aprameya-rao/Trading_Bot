@@ -7,9 +7,7 @@ import { getStatus, authenticate, startBot, stopBot } from '../services/api';
 export default function ParametersPanel({ isMock = false }) {
     const { enqueueSnackbar } = useSnackbar();
     
-    // ADDED: Get the spectator flag from the store
     const isSpectator = useStore(state => state.isSpectatorMode);
-    
     const isBotRunning = useStore(state => state.botStatus.is_running);
     const params = useStore(state => state.params);
     const updateParam = useStore(state => state.updateParam);
@@ -79,8 +77,12 @@ export default function ParametersPanel({ isMock = false }) {
             }
             setIsStopLoading(false);
     };
-    if (auth.status === 'loading') return <Paper sx={{ p: 2, textAlign: 'center' }}><CircularProgress /></Paper>;
+
+    if (auth.status === 'loading') {
+        return <Paper sx={{ p: 2, textAlign: 'center' }}><CircularProgress /></Paper>;
+    }
     
+    // MODIFIED: Added !isBotRunning condition to the status check
     if (auth.status !== 'authenticated' && !isBotRunning) {
         return (
             <Paper elevation={3} sx={{ p: 2 }}>
@@ -94,10 +96,10 @@ export default function ParametersPanel({ isMock = false }) {
         );
     }
     
+    // MODIFIED: Added fields for the new parameters
     const fields = [
         { label: 'Select Index', name: 'selectedIndex', type: 'select', options: ['SENSEX', 'NIFTY'] },
         { label: 'Trading Mode', name: 'trading_mode', type: 'select', options: ['Paper Trading', 'Live Trading'] },
-        { label: 'Aggressiveness', name: 'aggressiveness', type: 'select', options: ['Conservative', 'Moderate'] },
         { label: 'Capital', name: 'start_capital', type: 'number' },
         { label: 'Risk Per Trade (%)', name: 'risk_per_trade_percent', type: 'number'},
         { label: 'SL (Points)', name: 'trailing_sl_points', type: 'number' },
@@ -106,6 +108,9 @@ export default function ParametersPanel({ isMock = false }) {
         { label: 'Daily PT (₹)', name: 'daily_pt', type: 'number' },
         { label: 'Partial Profit %', name: 'partial_profit_pct', type: 'number'},
         { label: 'Partial Exit %', name: 'partial_exit_pct', type: 'number'},
+        // ADDED: New parameter fields
+        { label: 'Re-entry Thresh (%)', name: 'recovery_threshold_pct', type: 'number' },
+        { label: 'Max Qty / Order', name: 'max_lots_per_order', type: 'number' },
     ];
 
     return (
@@ -117,19 +122,16 @@ export default function ParametersPanel({ isMock = false }) {
                         {field.type === 'select' ? (
                             <FormControl fullWidth size="small">
                                 <InputLabel>{field.label}</InputLabel>
-                                {/* CHANGED: Added isSpectator to disabled prop */}
                                 <Select name={field.name} value={params[field.name] || ''} label={field.label} onChange={handleChange} disabled={isBotRunning || isSpectator}>
                                     {field.options.map(opt => <MenuItem key={opt} value={opt}>{opt}</MenuItem>)}
                                 </Select>
                             </FormControl>
                         ) : (
-                            // CHANGED: Added isSpectator to disabled prop
                             <TextField name={field.name} label={field.label} type="number" value={params[field.name] || ''} onChange={handleChange} size="small" fullWidth disabled={isBotRunning || isSpectator}/>
                         )}
                     </Grid>
                 ))}
                 <Grid item xs={12}>
-                    {/* CHANGED: Added isSpectator to disabled prop */}
                     <FormControlLabel control={<Checkbox name="auto_scan_uoa" checked={!!params.auto_scan_uoa} onChange={handleChange} disabled={isBotRunning || isSpectator} />} label="Enable Auto-Scan for UOA" />
                 </Grid>
             </Grid>
@@ -139,7 +141,6 @@ export default function ParametersPanel({ isMock = false }) {
                     variant="contained"
                     color="success"
                     onClick={handleStart}
-                    // CHANGED: Added isSpectator to disabled prop
                     disabled={isBotRunning || isStartLoading || isStopLoading || isSpectator}
                 >
                     {isStartLoading ? <CircularProgress size={24} color="inherit" /> : 'Start Bot'}
@@ -149,7 +150,6 @@ export default function ParametersPanel({ isMock = false }) {
                     variant="contained"
                     color="error"
                     onClick={handleStop}
-                    // CHANGED: Added isSpectator to disabled prop
                     disabled={!isBotRunning || isStartLoading || isStopLoading || isSpectator}
                 >
                     {isStopLoading ? <CircularProgress size={24} color="inherit" /> : 'Stop Bot'}
