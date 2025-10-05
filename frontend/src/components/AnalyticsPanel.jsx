@@ -40,17 +40,24 @@ export default function AnalyticsPanel({ scope = 'all' }) {
         scope === 'today' ? state.tradeHistory : state.allTimeTradeHistory
     );
     
+    // Add safety check for undefined or null
+    if (!tradesToAnalyze || !Array.isArray(tradesToAnalyze)) {
+        return <Typography sx={{ p: 2 }}>Loading trade data...</Typography>;
+    }
+    
     const stats = useMemo(() => {
-        if (tradesToAnalyze.length === 0) {
+        if (!tradesToAnalyze || tradesToAnalyze.length === 0) {
             return null;
         }
 
         let totalPnl = 0, grossProfit = 0, grossLoss = 0, winningTrades = 0, losingTrades = 0, maxLoss = 0;
         const equityCurve = [];
         
-        const sortedTrades = [...tradesToAnalyze].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+        try {
+            const sortedTrades = [...tradesToAnalyze].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
 
-        sortedTrades.forEach((trade) => {
+        let lastTimestamp = 0;
+        sortedTrades.forEach((trade, index) => {
             // --- THIS IS THE NEW VALIDATION BLOCK ---
             // It checks if net_pnl is a valid number before using it.
             if (typeof trade.net_pnl !== 'number' || isNaN(trade.net_pnl)) {
@@ -68,7 +75,14 @@ export default function AnalyticsPanel({ scope = 'all' }) {
                 grossLoss += Math.abs(trade.pnl);
                 maxLoss = Math.max(maxLoss, Math.abs(trade.pnl));
             }
-            const unixTime = Math.floor(new Date(trade.timestamp).getTime() / 1000);
+            
+            // Fix duplicate timestamps by adding 1 second for each duplicate
+            let unixTime = Math.floor(new Date(trade.timestamp).getTime() / 1000);
+            if (unixTime <= lastTimestamp) {
+                unixTime = lastTimestamp + 1;
+            }
+            lastTimestamp = unixTime;
+            
             equityCurve.push({ time: unixTime, value: totalPnl });
         });
 
@@ -76,11 +90,15 @@ export default function AnalyticsPanel({ scope = 'all' }) {
         const winRate = totalTrades > 0 ? (winningTrades / totalTrades) * 100 : 0;
         const profitFactor = grossLoss > 0 ? grossProfit / grossLoss : Infinity;
 
-        return {
-            trades: sortedTrades.reverse(),
-            equityCurve,
-            summary: { totalPnl, profitFactor, totalTrades, winRate, maxLoss },
-        };
+            return {
+                trades: sortedTrades.reverse(),
+                equityCurve,
+                summary: { totalPnl, profitFactor, totalTrades, winRate, maxLoss },
+            };
+        } catch (error) {
+            console.error('Error calculating trade statistics:', error);
+            return null;
+        }
     }, [tradesToAnalyze]);
 
     if (!stats) return <Typography sx={{ p: 2 }}>No trade data found for this period.</Typography>;

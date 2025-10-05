@@ -2,13 +2,14 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { Paper, Typography, Grid, TextField, Select, MenuItem, Button, FormControl, InputLabel, CircularProgress, Box, Checkbox, FormControlLabel } from '@mui/material';
 import { useSnackbar } from 'notistack';
 import { useStore } from '../store/store';
-import { getStatus, authenticate, startBot, stopBot } from '../services/api';
+import { getStatus, authenticate, startBot, stopBot, pauseBot, unpauseBot, updateStrategyParams } from '../services/api';
 
 export default function ParametersPanel({ isMock = false }) {
     const { enqueueSnackbar } = useSnackbar();
     
     const isSpectator = useStore(state => state.isSpectatorMode);
     const isBotRunning = useStore(state => state.botStatus.is_running);
+    const isPaused = useStore(state => state.botStatus.is_paused);
     const params = useStore(state => state.params);
     const updateParam = useStore(state => state.updateParam);
 
@@ -17,6 +18,7 @@ export default function ParametersPanel({ isMock = false }) {
     
     const [isStartLoading, setIsStartLoading] = useState(false);
     const [isStopLoading, setIsStopLoading] = useState(false);
+    const [isPauseLoading, setIsPauseLoading] = useState(false);
 
     const fetchStatus = useCallback(async () => {
         try {
@@ -50,12 +52,22 @@ export default function ParametersPanel({ isMock = false }) {
         setIsStartLoading(false);
     };
 
-    const handleChange = (e) => {
+    const handleChange = async (e) => {
         const { name, value, type, checked } = e.target;
-        updateParam(name, type === 'checkbox' ? checked : value);
-    };
-    
-    const handleStart = async () => {
+        const newValue = type === 'checkbox' ? checked : value;
+        updateParam(name, newValue);
+        
+        // Auto-update Supertrend parameters to strategy if bot is running
+        if (isBotRunning && (name === 'supertrend_period' || name === 'supertrend_multiplier')) {
+            try {
+                await updateStrategyParams({ [name]: newValue });
+                enqueueSnackbar(`${name === 'supertrend_period' ? 'Period' : 'Multiplier'} updated to ${newValue}`, { variant: 'success' });
+            } catch (error) {
+                console.error('Failed to update strategy parameters:', error);
+                enqueueSnackbar('Failed to update Supertrend settings', { variant: 'error' });
+            }
+        }
+    };    const handleStart = async () => {
         setIsStartLoading(true);
         try {
             const data = await startBot(params, params.selectedIndex);
@@ -68,17 +80,32 @@ export default function ParametersPanel({ isMock = false }) {
 
     const handleStop = async () => {
         setIsStopLoading(true);
-            try {
+        try {
+            if (isBotRunning) {
                 const data = await stopBot();
-                enqueueSnackbar(data.message, { variant: 'warning' });
-                useStore.getState().resetRealtimeData();
-            } catch (error) {
-                enqueueSnackbar(error.message, { variant: 'error' });
+                if (data?.success) {
+                    setStatus(data.status);
+                    // Pause state will be reset via WebSocket status updates
+                }
             }
+        } catch (error) {
+            console.error('Error stopping bot:', error);
+        } finally {
             setIsStopLoading(false);
+        }
     };
 
-    if (auth.status === 'loading') {
+    const handlePause = async () => {
+        setIsPauseLoading(true);
+        try {
+            await (isPaused ? unpauseBot() : pauseBot());
+            // Pause state will be synced via WebSocket status updates
+        } catch (error) {
+            console.error('Error pausing/unpausing bot:', error);
+        } finally {
+            setIsPauseLoading(false);
+        }
+    };    if (auth.status === 'loading') {
         return <Paper sx={{ p: 2, textAlign: 'center' }}><CircularProgress /></Paper>;
     }
     
@@ -104,8 +131,12 @@ export default function ParametersPanel({ isMock = false }) {
         { label: 'SL (%)', name: 'trailing_sl_percent', type: 'number' },
         { label: 'Daily SL (₹)', name: 'daily_sl', type: 'number' },
         { label: 'Daily PT (₹)', name: 'daily_pt', type: 'number' },
+        { label: 'Trade PT (₹)', name: 'trade_profit_target', type: 'number' },
+        { label: 'BE %', name: 'break_even_percent', type: 'number' },
         { label: 'Partial Profit %', name: 'partial_profit_pct', type: 'number'},
         { label: 'Partial Exit %', name: 'partial_exit_pct', type: 'number'},
+        { label: 'Supertrend Period', name: 'supertrend_period', type: 'number'},
+        { label: 'Supertrend Multiplier', name: 'supertrend_multiplier', type: 'number', step: '0.1'},
         // REMOVED: Recovery and Max Qty are no longer used by the backend logic
         // { label: 'Re-entry Thresh (%)', name: 'recovery_threshold_pct', type: 'number' },
         // { label: 'Max Qty / Order', name: 'max_lots_per_order', type: 'number' },
@@ -146,6 +177,15 @@ export default function ParametersPanel({ isMock = false }) {
                     disabled={isBotRunning || isStartLoading || isStopLoading || isSpectator}
                 >
                     {isStartLoading ? <CircularProgress size={24} color="inherit" /> : 'Start Bot'}
+                </Button>
+                <Button
+                    fullWidth
+                    variant="contained"
+                    color={isPaused ? "secondary" : "warning"}
+                    onClick={handlePause}
+                    disabled={!isBotRunning || isStartLoading || isStopLoading || isPauseLoading || isSpectator}
+                >
+                    {isPauseLoading ? <CircularProgress size={24} color="inherit" /> : (isPaused ? 'Resume' : 'Pause')}
                 </Button>
                 <Button
                     fullWidth

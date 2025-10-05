@@ -41,11 +41,18 @@ export const startBot = (params, selectedIndex) => apiRequest('/start', {
     body: JSON.stringify({ params, selectedIndex }),
 });
 export const stopBot = () => apiRequest('/stop', { method: 'POST' });
+export const pauseBot = () => apiRequest('/pause', { method: 'POST' });
+export const unpauseBot = () => apiRequest('/unpause', { method: 'POST' });
 export const manualExit = () => apiRequest('/manual_exit', { method: 'POST' });
 
 // --- Intelligence & Parameters ---
 export const runOptimizer = () => apiRequest('/optimize', { method: 'POST' });
 export const resetParams = () => apiRequest('/reset_params', { method: 'POST' });
+export const updateStrategyParams = (params) => apiRequest('/update_strategy_params', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+});
 
 // --- Data Fetching ---
 export const getTradeHistory = () => apiRequest('/trade_history');

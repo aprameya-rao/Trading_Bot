@@ -119,6 +119,42 @@ async def get_all_trade_history():
             raise HTTPException(status_code=500, detail=f"Failed to fetch all trade history: {e}")
     return await asyncio.to_thread(db_call)
 
+@app.get("/api/chart_data")
+async def get_chart_data(service: TradingBotService = Depends(get_bot_service)):
+    """Get historical chart data with indicators for testing."""
+    if not service.strategy_instance or not service.strategy_instance.data_manager:
+        return {"data": [], "message": "No strategy instance or data manager"}
+    
+    temp_df = service.strategy_instance.data_manager.data_df.copy()
+    if temp_df.empty:
+        return {"data": [], "message": "No historical data available"}
+    
+    chart_data = []
+    for index, row in temp_df.iterrows():
+        timestamp = int(index.timestamp())
+        point = {
+            "timestamp": timestamp,
+            "time": timestamp,
+            "open": row.get("open", 0),
+            "high": row.get("high", 0), 
+            "low": row.get("low", 0),
+            "close": row.get("close", 0)
+        }
+        
+        # Add indicators if available
+        if 'supertrend' in row and pd.notna(row.get('supertrend')):
+            point['supertrend'] = float(row['supertrend'])
+        if 'supertrend_uptrend' in row and pd.notna(row.get('supertrend_uptrend')):
+            point['supertrend_uptrend'] = bool(row['supertrend_uptrend'])
+            
+        rsi_col = f"RSI_{service.strategy_instance.params.get('rsi_period', 14)}"
+        if rsi_col in row and pd.notna(row.get(rsi_col)):
+            point['rsi'] = float(row[rsi_col])
+            
+        chart_data.append(point)
+    
+    return {"data": chart_data, "count": len(chart_data)}
+
 @app.post("/api/optimize")
 async def run_optimizer(service: TradingBotService = Depends(get_bot_service)):
     optimizer = OptimizerBot()
@@ -141,21 +177,56 @@ async def reset_uoa(service: TradingBotService = Depends(get_bot_service)):
 
 # --- THIS IS THE CORRECTED FUNCTION ---
 @app.post("/api/reset_params")
-async def reset_parameters(service: TradingBotService = Depends(get_bot_service)):
+async def reset_params(service: TradingBotService = Depends(get_bot_service)):
     try:
-        # Step 1: Overwrite the JSON file with the market standard defaults.
         with open("strategy_params.json", "w") as f:
             json.dump(MARKET_STANDARD_PARAMS, f, indent=4)
         
-        # Step 2: If the bot is running, tell it to reload its parameters from the file.
         if service.strategy_instance:
             await service.strategy_instance.reload_params()
-            await service.strategy_instance._log_debug("System", "Parameters have been reset to market defaults.")
-            
-        return {"status": "success", "message": "Parameters reset.", "params": MARKET_STANDARD_PARAMS}
+        
+        return {"status": "success", "message": "Parameters reset to market standards."}
     except Exception as e:
-        # The str(e) is included for better debugging if something else goes wrong.
         raise HTTPException(status_code=500, detail=f"Failed to reset parameters: {str(e)}")
+
+@app.post("/api/update_strategy_params")
+async def update_strategy_params(request: dict, service: TradingBotService = Depends(get_bot_service)):
+    """Update strategy parameters from frontend"""
+    try:
+        # Load current strategy params
+        try:
+            with open("strategy_params.json", "r") as f:
+                current_params = json.load(f)
+        except FileNotFoundError:
+            current_params = MARKET_STANDARD_PARAMS.copy()
+        
+        # Update only Supertrend parameters if provided
+        supertrend_params = ['supertrend_period', 'supertrend_multiplier']
+        updated = False
+        for param in supertrend_params:
+            if param in request and request[param] is not None:
+                # Convert to appropriate type
+                if param == 'supertrend_period':
+                    current_params[param] = int(request[param])
+                else:  # supertrend_multiplier
+                    current_params[param] = float(request[param])
+                updated = True
+        
+        if updated:
+            # Save updated parameters
+            with open("strategy_params.json", "w") as f:
+                json.dump(current_params, f, indent=4)
+            
+            # Reload in running strategy if active
+            if service.strategy_instance:
+                await service.strategy_instance.reload_params()
+            
+            return {"status": "success", "message": "Supertrend parameters updated successfully."}
+        else:
+            return {"status": "success", "message": "No parameters to update."}
+            
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to update parameters: {str(e)}")
 
 @app.post("/api/start")
 async def start_bot(req: StartRequest, service: TradingBotService = Depends(get_bot_service)):
@@ -164,6 +235,14 @@ async def start_bot(req: StartRequest, service: TradingBotService = Depends(get_
 @app.post("/api/stop")
 async def stop_bot(service: TradingBotService = Depends(get_bot_service)):
     return await service.stop_bot()
+
+@app.post("/api/pause")
+async def pause_bot(service: TradingBotService = Depends(get_bot_service)):
+    return await service.pause_bot()
+
+@app.post("/api/unpause")
+async def unpause_bot(service: TradingBotService = Depends(get_bot_service)):
+    return await service.unpause_bot()
 
 @app.post("/api/manual_exit")
 async def manual_exit_trade(service: TradingBotService = Depends(get_bot_service)):
@@ -199,10 +278,12 @@ async def websocket_endpoint(websocket: WebSocket, service: TradingBotService = 
                     await service.strategy_instance.add_to_watchlist(payload.get("side"), payload.get("strike"))
     
     except WebSocketDisconnect:
-        manager.disconnect()
+        manager.disconnect(websocket)
+        print("Client disconnected.")
     except Exception as e:
         print(f"Error in websocket endpoint: {e}")
-        manager.disconnect()
+        if websocket.client_state != 3: # STATE_DISCONNECTED
+             manager.disconnect(websocket)
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False)

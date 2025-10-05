@@ -70,8 +70,7 @@ export default function IndexChart({ data }) {
         seriesRef.current.rsiSmaSeries = rsiChart.addLineSeries({ color: '#f5a623', lineWidth: 2, title: 'RSI SMA' });
 
         seriesRef.current.candlestickSeries = priceChart.addCandlestickSeries({ upColor: '#26a69a', downColor: '#ef5350', borderVisible: false, wickUpColor: '#26a69a', wickDownColor: '#ef5350' });
-        seriesRef.current.wmaSeries = priceChart.addLineSeries({ color: '#2962FF', lineWidth: 2, title: 'WMA' });
-        seriesRef.current.smaSeries = priceChart.addLineSeries({ color: '#FF6D00', lineWidth: 2, title: 'SMA' });
+        seriesRef.current.supertrendSeries = priceChart.addLineSeries({ color: '#9C27B0', lineWidth: 3, title: 'Supertrend' });
 
         // --- CRITICAL: SYNCHRONIZE THE TWO CHARTS ---
         const syncTimeScales = (sourceChart, targetChart) => (range) => {
@@ -94,11 +93,10 @@ export default function IndexChart({ data }) {
 
     // This data update effect remains largely the same
     useEffect(() => {
-        if (!data || Object.keys(seriesRef.current).length < 5) return;
+        if (!data || Object.keys(seriesRef.current).length < 4) return;
 
         if (data.candles) seriesRef.current.candlestickSeries.setData(data.candles);
-        if (data.wma) seriesRef.current.wmaSeries.setData(data.wma);
-        if (data.sma) seriesRef.current.smaSeries.setData(data.sma);
+        if (data.supertrend) seriesRef.current.supertrendSeries.setData(data.supertrend);
         if (data.rsi) seriesRef.current.rsiSeries.setData(data.rsi);
         if (data.rsi_sma) seriesRef.current.rsiSmaSeries.setData(data.rsi_sma);
         
@@ -127,12 +125,8 @@ export default function IndexChart({ data }) {
             <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 2, mb: 1, alignItems: 'center', flexShrink: 0 }}>
                 <Typography variant="body2">Index Chart</Typography>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                    <Box sx={{ width: 12, height: 12, backgroundColor: '#FF6D00' }} />
-                    <Typography variant="caption">SMA</Typography>
-                </Box>
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                    <Box sx={{ width: 12, height: 12, backgroundColor: '#2962FF' }} />
-                    <Typography variant="caption">WMA</Typography>
+                    <Box sx={{ width: 12, height: 12, backgroundColor: '#9C27B0' }} />
+                    <Typography variant="caption">Supertrend</Typography>
                 </Box>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                     <Box sx={{ width: 12, height: 12, backgroundColor: 'rgba(136, 132, 216, 0.7)' }} />

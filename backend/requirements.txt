@@ -8,7 +8,9 @@ websockets
 asyncio
 SQLAlchemy
 gunicorn
+pandas-ta
+scipy
+simpleaudio
 
-#source venv/bin/actviate(to be once on restart of vs code 
-# gunicorn -w 1 -k uvicorn.workers.UvicornWorker main:app --bind 0.0.0.0:8000
-gunicorn -w 1 -k uvicorn.workers.UvicornWorker main:app --bind 0.0.0.0:8000
+# Run the trading bot
+#python main.py

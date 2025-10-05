@@ -90,6 +90,22 @@ class TradingBotService:
 
         return {"status": "success", "message": "Bot stopped."}
 
+    async def pause_bot(self):
+        if not self.strategy_instance:
+            raise HTTPException(status_code=400, detail="Bot is not running.")
+        
+        self.strategy_instance.is_paused = True
+        await self.strategy_instance._log_debug("PAUSE", "Bot PAUSED - No new trades will be taken. Existing positions continue monitoring.")
+        return {"status": "success", "message": "Bot paused.", "is_paused": True}
+
+    async def unpause_bot(self):
+        if not self.strategy_instance:
+            raise HTTPException(status_code=400, detail="Bot is not running.")
+        
+        self.strategy_instance.is_paused = False
+        await self.strategy_instance._log_debug("UNPAUSE", "Bot RESUMED - New trades enabled.")
+        return {"status": "success", "message": "Bot unpaused.", "is_paused": False}
+
     async def manual_exit_trade(self):
         if not self.strategy_instance:
             raise HTTPException(status_code=400, detail="Bot is not running.")

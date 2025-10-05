@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useCallback } from 'react';
 import { Howl } from 'howler';
-import { Grid, ThemeProvider, createTheme, CssBaseline, Box } from '@mui/material';
+import { Grid, ThemeProvider, createTheme, CssBaseline, Box, Typography } from '@mui/material';
+import ErrorBoundary from './ErrorBoundary.jsx';
 import StatusPanel from './components/StatusPanel';
 import ParametersPanel from './components/ParametersPanel';
 import IntelligencePanel from './components/IntelligencePanel';
@@ -31,15 +32,35 @@ const lightTheme = createTheme({
 });
 
 function App() {
+    // Debug: Check if App component is even being called
+    console.log("🚀 App function called!");
+    
     const { enqueueSnackbar } = useSnackbar();
     const socketRef = useRef(null);
     const reconnectTimerRef = useRef(null);
     const pingIntervalRef = useRef(null);
+    const pongTimeoutRef = useRef(null);
+    const lastPongRef = useRef(Date.now());
+    const isConnectingRef = useRef(false);
+    const reconnectAttemptsRef = useRef(0);
+
+    // Debug: Try to get store state
+    let storeState;
+    try {
+        storeState = useStore();
+        console.log("✅ Store state retrieved:", storeState);
+    } catch (error) {
+        console.error("❌ Error getting store state:", error);
+        return <div style={{padding: '20px', color: 'red'}}>Store Error: {error.message}</div>;
+    }
 
     const { 
         botStatus, dailyPerformance, currentTrade, debugLogs, 
         optionChain, chartData, socketStatus
-    } = useStore();
+    } = storeState;
+    
+    // Debug: Log to console to verify App is rendering
+    console.log("📊 App component rendering with data:", { botStatus, socketStatus });
 
     const sendSocketMessage = useCallback((message) => {
         if (socketRef.current?.readyState === WebSocket.OPEN) {
@@ -52,12 +73,25 @@ function App() {
     useEffect(() => {
         const { getState, setState } = useStore;
 
-        const connect = () => {
+        const connect = async () => {
+            if (isConnectingRef.current || socketRef.current?.readyState === WebSocket.OPEN) {
+                console.log('Already connecting or connected, skipping...');
+                return;
+            }
+            
+            isConnectingRef.current = true;
+            setState({ socketStatus: 'CONNECTING' });
+            
             const handleOpen = async () => {
+                console.log('WebSocket connected successfully');
                 setState({ socketStatus: 'CONNECTED' });
+                isConnectingRef.current = false;
+                reconnectAttemptsRef.current = 0; // Reset reconnect attempts on successful connection
+                
+                // Reset loaded flags to allow fresh data load
+                await getState().resetLoadingFlags();
                 
                 try {
-                    console.log("Fetching trade histories...");
                     const [todayHistory, allTimeHistory] = await Promise.all([
                         getTradeHistory(),
                         getTradeHistoryAll()
@@ -73,9 +107,31 @@ function App() {
                 }
                 
                 if (pingIntervalRef.current) clearInterval(pingIntervalRef.current);
+                if (pongTimeoutRef.current) clearTimeout(pongTimeoutRef.current);
+                
+                lastPongRef.current = Date.now();
+                
                 pingIntervalRef.current = setInterval(() => {
-                    sendSocketMessage({ type: 'ping' });
-                }, 4000); 
+                    if (socketRef.current?.readyState === WebSocket.OPEN) {
+                        const timeSinceLastPong = Date.now() - lastPongRef.current;
+                        
+                        // Only disconnect if no pong received for 45 seconds (increased from 30)
+                        if (timeSinceLastPong > 45000) {
+                            console.warn('No pong received for 45 seconds, reconnecting...');
+                            if (socketRef.current) {
+                                socketRef.current.close(1000, 'Ping timeout');
+                            }
+                            return;
+                        }
+                        
+                        // Send ping
+                        try {
+                            socketRef.current.send(JSON.stringify({ type: 'ping' }));
+                        } catch (error) {
+                            console.error('Failed to send ping:', error);
+                        }
+                    }
+                }, 20000); // Increased ping frequency to every 20 seconds 
             };
             
             const handleMessage = (event) => {
@@ -93,6 +149,9 @@ function App() {
                         // ADDED: Handle straddle monitor updates
                         case 'straddle_update': getState().updateStraddleData(data.payload); break;
                         case 'play_sound': if (sounds[data.payload]) sounds[data.payload].play(); break;
+                        case 'pong': 
+                            lastPongRef.current = Date.now();
+                            break;
                         // ADDED: Handle system warnings like open positions
                         case 'system_warning':
                             enqueueSnackbar(data.payload.message, { 
@@ -100,39 +159,98 @@ function App() {
                                 persist: true, // Keep message visible
                             });
                             break;
-                        case 'pong': break;
                     }
                 } catch (error) {
                     console.error("Failed to parse socket message:", event.data, error);
                 }
             };
 
-            const handleClose = () => {
+            const handleClose = (event) => {
+                console.log('WebSocket closed:', event.code, event.reason);
                 setState({ socketStatus: 'DISCONNECTED' });
-                if (pingIntervalRef.current) clearInterval(pingIntervalRef.current);
-                reconnectTimerRef.current = setTimeout(connect, 5000);
+                isConnectingRef.current = false;
+                
+                // Clear intervals
+                if (pingIntervalRef.current) {
+                    clearInterval(pingIntervalRef.current);
+                    pingIntervalRef.current = null;
+                }
+                if (pongTimeoutRef.current) {
+                    clearTimeout(pongTimeoutRef.current);
+                    pongTimeoutRef.current = null;
+                }
+                
+                // Exponential backoff for reconnection
+                reconnectAttemptsRef.current++;
+                const delay = Math.min(1000 * Math.pow(2, reconnectAttemptsRef.current), 30000);
+                
+                console.log(`Will reconnect in ${delay/1000} seconds (attempt ${reconnectAttemptsRef.current})...`);
+                
+                if (reconnectTimerRef.current) {
+                    clearTimeout(reconnectTimerRef.current);
+                }
+                
+                reconnectTimerRef.current = setTimeout(() => {
+                    if (!isConnectingRef.current) {
+                        connect();
+                    }
+                }, delay);
             };
 
-            if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
-            if (pingIntervalRef.current) clearInterval(pingIntervalRef.current);
-            if (socketRef.current) socketRef.current.close();
+            // Clean up existing connections
+            if (reconnectTimerRef.current) {
+                clearTimeout(reconnectTimerRef.current);
+                reconnectTimerRef.current = null;
+            }
+            if (pingIntervalRef.current) {
+                clearInterval(pingIntervalRef.current);
+                pingIntervalRef.current = null;
+            }
+            if (socketRef.current && socketRef.current.readyState !== WebSocket.CLOSED) {
+                socketRef.current.close(1000, 'Reconnecting');
+            }
 
-            socketRef.current = createSocketConnection(
-                handleOpen, 
-                handleMessage, 
-                handleClose, 
-                (error) => console.error('Socket error:', error)
-            );
+            try {
+                socketRef.current = createSocketConnection(
+                    handleOpen, 
+                    handleMessage, 
+                    handleClose, 
+                    (error) => {
+                        console.error('Socket error:', error);
+                        isConnectingRef.current = false;
+                        setState({ socketStatus: 'DISCONNECTED' });
+                    }
+                );
+            } catch (error) {
+                console.error('Failed to create WebSocket connection:', error);
+                isConnectingRef.current = false;
+                setState({ socketStatus: 'DISCONNECTED' });
+            }
         };
 
         if (!MOCK_MODE) connect();
 
         return () => {
-            if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
-            if (pingIntervalRef.current) clearInterval(pingIntervalRef.current);
-            if (socketRef.current) socketRef.current.close();
+            console.log('Cleaning up WebSocket connections...');
+            isConnectingRef.current = false;
+            
+            if (reconnectTimerRef.current) {
+                clearTimeout(reconnectTimerRef.current);
+                reconnectTimerRef.current = null;
+            }
+            if (pingIntervalRef.current) {
+                clearInterval(pingIntervalRef.current);
+                pingIntervalRef.current = null;
+            }
+            if (pongTimeoutRef.current) {
+                clearTimeout(pongTimeoutRef.current);
+                pongTimeoutRef.current = null;
+            }
+            if (socketRef.current && socketRef.current.readyState !== WebSocket.CLOSED) {
+                socketRef.current.close(1000, 'Component unmounting');
+            }
         };
-    }, [MOCK_MODE, sendSocketMessage, enqueueSnackbar]);
+    }, [MOCK_MODE, enqueueSnackbar]);
 
     const handleManualExit = async () => {
         if (window.confirm('Are you sure you want to manually exit the current trade?')) {
@@ -145,24 +263,34 @@ function App() {
         }
     };
 
+    // Debug: Add a safety check
+    if (!botStatus) {
+        console.warn("⚠️ botStatus is undefined, using defaults");
+    }
+
     return (
         <ThemeProvider theme={lightTheme}>
             <CssBaseline />
-            <Box sx={{ p: 2 }}>
+            <Box sx={{ p: 2, minHeight: '100vh', bgcolor: '#f4f6f8' }}>
+                <Typography variant="h4" sx={{ mb: 2, color: 'primary.main', fontWeight: 'bold' }}>
+                    🤖 Trading Bot Dashboard
+                </Typography>
+                <Typography variant="body2" sx={{ mb: 2, color: 'text.secondary' }}>
+                    Socket: {socketStatus || 'DISCONNECTED'} | Bot: {botStatus?.connection || 'DISCONNECTED'}
+                </Typography>
                 <Grid container spacing={2}>
                     <Grid item xs={12} md={4} container direction="column" spacing={2} wrap="nowrap">
-                        <Grid item><StatusPanel status={botStatus} socketStatus={socketStatus} /></Grid>
-                        <Grid item><CurrentTradePanel trade={currentTrade} onManualExit={handleManualExit} /></Grid>
-                        <Grid item><ParametersPanel isMock={MOCK_MODE} /></Grid>
-                        <Grid item><IntelligencePanel /></Grid>
-                        {/* ADDED: Straddle Monitor component in the layout */}
-                        <Grid item><StraddleMonitor /></Grid>
-                        <Grid item><NetPerformancePanel data={dailyPerformance} /></Grid>
+                        <ErrorBoundary name="StatusPanel"><Grid item><StatusPanel status={botStatus} socketStatus={socketStatus} /></Grid></ErrorBoundary>
+                        <ErrorBoundary name="CurrentTradePanel"><Grid item><CurrentTradePanel trade={currentTrade} onManualExit={handleManualExit} /></Grid></ErrorBoundary>
+                        <ErrorBoundary name="ParametersPanel"><Grid item><ParametersPanel isMock={MOCK_MODE} /></Grid></ErrorBoundary>
+                        <ErrorBoundary name="IntelligencePanel"><Grid item><IntelligencePanel /></Grid></ErrorBoundary>
+                        <ErrorBoundary name="StraddleMonitor"><Grid item><StraddleMonitor /></Grid></ErrorBoundary>
+                        <ErrorBoundary name="NetPerformancePanel"><Grid item><NetPerformancePanel data={dailyPerformance} /></Grid></ErrorBoundary>
                     </Grid>
                     <Grid item xs={12} md={8} sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                        <Box><IndexChart data={chartData} /></Box>
-                        <Box><OptionChain data={optionChain} /></Box>
-                        <Box sx={{ flexGrow: 1, minHeight: 0 }}><LogTabs debugLogs={debugLogs}/></Box>
+                        <ErrorBoundary name="IndexChart"><Box><IndexChart data={chartData} /></Box></ErrorBoundary>
+                        <ErrorBoundary name="OptionChain"><Box><OptionChain data={optionChain} /></Box></ErrorBoundary>
+                        <ErrorBoundary name="LogTabs"><Box sx={{ flexGrow: 1, minHeight: 0 }}><LogTabs debugLogs={debugLogs}/></Box></ErrorBoundary>
                     </Grid>
                 </Grid>
             </Box>

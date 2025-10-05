@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Paper, Box, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Tabs, Tab } from '@mui/material';
+import { Paper, Box, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Tabs, Tab, Typography } from '@mui/material';
 import AnalyticsPanel from './AnalyticsPanel'; // NEW: Import the reusable component
 
 function TabPanel(props) {
@@ -32,13 +32,23 @@ export default function LogTabs({ debugLogs }) {
                     <Table stickyHeader size="small">
                         <TableHead><TableRow><TableCell>Time</TableCell><TableCell>Source</TableCell><TableCell>Message</TableCell></TableRow></TableHead>
                         <TableBody>
-                            {debugLogs.map((log, i) => (
-                                <TableRow key={i}>
-                                    <TableCell>{log.time}</TableCell>
-                                    <TableCell>{log.source}</TableCell>
-                                    <TableCell>{log.message}</TableCell>
+                            {debugLogs && debugLogs.length > 0 ? (
+                                debugLogs.map((log, i) => (
+                                    <TableRow key={i}>
+                                        <TableCell>{log.time}</TableCell>
+                                        <TableCell>{log.source}</TableCell>
+                                        <TableCell>{log.message}</TableCell>
+                                    </TableRow>
+                                ))
+                            ) : (
+                                <TableRow>
+                                    <TableCell colSpan={3} align="center" sx={{ py: 4 }}>
+                                        <Typography variant="body2" color="text.secondary">
+                                            No debug logs yet. Start the bot to see live trading activity.
+                                        </Typography>
+                                    </TableCell>
                                 </TableRow>
-                            ))}
+                            )}
                         </TableBody>
                     </Table>
                 </TableContainer>
